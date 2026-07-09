@@ -130,6 +130,8 @@ class LaraCerebro:
         self._lock = threading.RLock()
         # Pila de acciones REVERSIBLES de la sesión (para "deshaz lo último").
         self._undo = []
+        # Evita recursión infinita al "buscar otra vía" para una capacidad ausente.
+        self._en_recuperacion = False
 
     # ── sesiones ──────────────────────────────────────────────
     def _persistir(self, role: str, content: str):
@@ -222,6 +224,27 @@ class LaraCerebro:
         self._undo.append((descripcion, accion_inversa))
         if len(self._undo) > 20:
             self._undo = self._undo[-20:]
+
+    def _recuperar_capacidad(self, operacion: str, valor: str) -> None:
+        """LARA no tenía una operación directa para algo: en vez de rendirse,
+        pide al modelo conseguirlo POR OTRA VÍA (un comando de Windows/PowerShell
+        o proponiendo una skill). Así "se las ingenia". La acción resultante pasa
+        igual por el gate de modos (en manual te pedirá confirmar el comando)."""
+        pedido = next((h["content"] for h in reversed(self.historial)
+                       if h["role"] == "user" and not h["content"].startswith("[")), operacion)
+        self._status("Buscando otra forma de hacerlo...")
+        nudge = (f"No existe una operación de sistema para '{operacion}'. Consíguelo IGUAL por otra vía: "
+                 f"usa accion='cmd' con UN comando de Windows/PowerShell de una sola línea y NO interactivo "
+                 f"que lo logre; si de verdad no hay comando posible, usa accion='proponer_skill'. "
+                 f'Petición original del usuario: "{pedido}". Valor pedido: "{valor}". Responde SOLO el JSON.')
+        try:
+            sys_prompt = generar_prompt_sistema(self.contexto_ejecucion)
+            siguiente = consultar_lara(nudge, sys_prompt, self.historial[-6:])
+            self.historial.append({"role": "assistant", "content": siguiente})
+            self._procesar_respuesta_llm(siguiente)
+        except Exception as e:
+            log_error("recuperar_capacidad", str(e))
+            self._say(f"No encontré una forma de hacer '{operacion}' esta vez.")
 
     def _deshacer_ultimo(self) -> str:
         if not self._undo:
@@ -1237,6 +1260,15 @@ class LaraCerebro:
             operacion = params[0] if params else ""
             valor = params[1] if len(params) > 1 else ""
             r = _sistema(operacion, valor)
+            # Si no existe esa operación, LARA no se rinde: busca OTRA VÍA
+            # (comando de Windows o proponer una skill) en vez de decir "no sé".
+            if r.get("desconocida") and not self._en_recuperacion:
+                self._en_recuperacion = True
+                try:
+                    self._recuperar_capacidad(operacion, valor)
+                finally:
+                    self._en_recuperacion = False
+                return
             self._say(r.get("mensaje", "Listo."))
             self.contexto_ejecucion = f"[sistema {operacion}]: {r.get('mensaje','')[:300]}"
             return

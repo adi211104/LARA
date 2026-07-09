@@ -44,7 +44,10 @@ os.makedirs(_dir_tmp, exist_ok=True)
 #     sientes que tarda en arrancar tras terminar de hablar.
 #   VAD_MAX_FRASE: tope de segundos de una sola intervención (para frases largas
 #     no se corta a los 15 s como antes).
-VAD_FIN_SILENCIO = 1.5
+# 0.8 s (antes 1.5): en cuanto callas, LARA arranca a transcribir casi al
+# instante. Si te llega a cortar cuando haces pausas largas a media frase,
+# súbelo un poco (p. ej. 1.0). Se puede forzar con la variable LARA_FIN_SILENCIO.
+VAD_FIN_SILENCIO = float(os.environ.get("LARA_FIN_SILENCIO", "0.8"))
 VAD_MAX_FRASE = 22.0
 
 # Cola y trabajador único de reproducción

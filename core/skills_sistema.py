@@ -81,6 +81,26 @@ def _volumen(direccion):
         return {"error": str(e), "mensaje": "No pude cambiar el volumen."}
 
 
+def _volumen_set(valor):
+    """Fija el volumen a un nivel ABSOLUTO (0-100). Sin dependencias extra:
+    lleva el volumen a 0 (50 pasos de bajar, cada tecla = 2%) y luego sube al
+    nivel pedido. Fiable en cualquier Windows."""
+    try:
+        n = int(round(float(str(valor).strip().rstrip("%").replace(",", "."))))
+    except (ValueError, TypeError):
+        return {"mensaje": "Dime a qué nivel pongo el volumen, del 0 al 100."}
+    n = max(0, min(100, n))
+    try:
+        import pyautogui
+        for _ in range(50):                 # a 0% (cada paso baja 2%)
+            pyautogui.press("volumedown")
+        for _ in range(round(n / 2)):       # subir hasta el nivel pedido
+            pyautogui.press("volumeup")
+        return {"mensaje": f"Volumen al {n}%."}
+    except Exception as e:
+        return {"error": str(e), "mensaje": "No pude ajustar el volumen."}
+
+
 def _bloquear():
     try:
         subprocess.Popen("rundll32.exe user32.dll,LockWorkStation", shell=True)
@@ -144,6 +164,9 @@ _OPS = {
     "wifi": lambda v: _wifi(),
     "volumen_subir": lambda v: _volumen("subir"),
     "volumen_bajar": lambda v: _volumen("bajar"),
+    "volumen": lambda v: _volumen_set(v),        # nivel absoluto 0-100
+    "volumen_set": lambda v: _volumen_set(v),
+    "audio": lambda v: _volumen_set(v),
     "silenciar": lambda v: _volumen("silenciar"),
     "bloquear": lambda v: _bloquear(),
     "captura": lambda v: _captura(),
@@ -159,6 +182,9 @@ def ejecutar(operacion: str, valor: str = "") -> dict:
     op = (operacion or "").lower().strip()
     fn = _OPS.get(op)
     if not fn:
-        return {"mensaje": f"No conozco la operación de sistema '{operacion}'.",
+        # 'desconocida' avisa al cerebro para que BUSQUE OTRA VÍA (cmd/PowerShell
+        # o proponer una skill) en vez de rendirse con "no conozco esa operación".
+        return {"desconocida": True, "operacion": op,
+                "mensaje": f"No tengo una operación de sistema '{operacion}'.",
                 "operaciones": list(_OPS.keys())}
     return fn(valor)

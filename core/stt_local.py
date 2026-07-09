@@ -25,6 +25,8 @@ LARA_WHISPER_MODEL (ej: medium) y el dispositivo con LARA_WHISPER_DEVICE
 """
 
 import os
+# Silencia el aviso de symlinks de HuggingFace en Windows (no afecta al uso).
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 import threading
 
 _modelo = None
@@ -106,9 +108,14 @@ def transcribir(crudo: bytes, sr_rate: int = 16000):
                     np.linspace(0, audio.size, n, endpoint=False),
                     np.arange(audio.size), audio).astype(np.float32)
 
+        # beam_size=1 (greedy) transcribe ~2-3x más rápido que beam_size=5, con
+        # pérdida de precisión mínima en frases cortas de comando/charla — que es
+        # el 99% del uso por voz. Ajustable con LARA_WHISPER_BEAM si algún día
+        # quieres priorizar precisión sobre velocidad.
+        beam = int(os.environ.get("LARA_WHISPER_BEAM", "1"))
         segmentos, _info = modelo.transcribe(
             audio, language=_IDIOMA, vad_filter=True,
-            beam_size=5, temperature=0.0,
+            beam_size=beam, temperature=0.0,
             condition_on_previous_text=False,
         )
         partes = []

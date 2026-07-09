@@ -314,6 +314,7 @@ Ejemplos (entrada -> tu salida exacta):
 # y decide la nube (que sabrá usar cmd, una skill o proponer una nueva).
 _OPS_SISTEMA = {
     "hora", "bateria", "info", "ip", "wifi", "volumen_subir", "volumen_bajar",
+    "volumen", "volumen_set", "audio",
     "silenciar", "bloquear", "captura", "papelera", "procesos", "portapapeles",
     "anota", "abrir_carpeta",
 }
@@ -648,7 +649,7 @@ requiere_razonamiento_profundo=true SOLO si accion=hablar y es pregunta técnica
 "mensaje": si accion=hablar es TU RESPUESTA COMPLETA al usuario (frases enteras, naturales, útiles — NUNCA una sola palabra tipo "Informando"). Para las demás acciones, una frase corta en gerundio/futuro (no afirmes que ya quedó hecho: el resultado real llega después).
 
 Acciones (elige UNA):
-hablar · cmd(comando) · cmd_admin(elevado) · abrir(programa) · listar(carpeta) · leer(archivo) · crear(archivo,contenido) · ejecutar_codigo(python) · ejecutar_codigo_visible · escribir(texto: teclea en la ventana activa) · escribir_en(programa,texto: abre el programa y escribe) · clic(que_clicar) · buscar(internet) · web(url) · url(url[,navegador]) · descargar(url[,nombre]) · descargar_video(url) · copiar_archivo(o,d) · mover_archivo(o,d) · ajustar_brillo(0-100) · sistema(op,[valor]) op=hora|bateria|info|ip|wifi|volumen_subir|volumen_bajar|silenciar|bloquear|captura|papelera|procesos|portapapeles|anota|abrir_carpeta · gestion(tarea/cliente/compra/proyecto con fecha) · recordatorio_rapido(texto,minutos) · guardar_conocimiento(titulo,contenido,categoria,tags) · analizar_pantalla([pregunta]) · ver(ruta[,pregunta]) · aprender_archivo(ruta) · explicar(tema: abre una animación HUD con voz — ver regla abajo) · ejecutar_skill(nombre[,arg]) · proponer_skill(nombre,descripcion) · aceptar_propuesta(nombre[,desc,args]) · listar_propuestas
+hablar · cmd(comando) · cmd_admin(elevado) · abrir(programa) · listar(carpeta) · leer(archivo) · crear(archivo,contenido) · ejecutar_codigo(python) · ejecutar_codigo_visible · escribir(texto: teclea en la ventana activa) · escribir_en(programa,texto: abre el programa y escribe) · clic(que_clicar) · buscar(internet) · web(url) · url(url[,navegador]) · descargar(url[,nombre]) · descargar_video(url) · copiar_archivo(o,d) · mover_archivo(o,d) · ajustar_brillo(0-100) · sistema(op,[valor]) op=hora|bateria|info|ip|wifi|volumen_subir|volumen_bajar|volumen(nivel 0-100, p.ej. "pon el audio al 50"->sistema,["volumen","50"])|silenciar|bloquear|captura|papelera|procesos|portapapeles|anota|abrir_carpeta · gestion(tarea/cliente/compra/proyecto con fecha) · recordatorio_rapido(texto,minutos) · guardar_conocimiento(titulo,contenido,categoria,tags) · analizar_pantalla([pregunta]) · ver(ruta[,pregunta]) · aprender_archivo(ruta) · explicar(tema: abre una animación HUD con voz — ver regla abajo) · ejecutar_skill(nombre[,arg]) · proponer_skill(nombre,descripcion) · aceptar_propuesta(nombre[,desc,args]) · listar_propuestas
 
 Reglas:
 - Capacidad ya en SKILLS INSTALADAS -> ejecutar_skill (NUNCA proponer_skill).
@@ -751,7 +752,11 @@ def consultar_lara(user_input: str, sys_prompt: str, historial: list) -> str:
                 idx += 1
                 continue
             if any(k in s for k in ("500", "INTERNAL", "503")):
-                time.sleep(3)
+                # Antes: sleep(3) reintentando el MISMO modelo hasta 6 veces (~18s
+                # de espera con la nube caída). Ahora: espera breve y PASA al
+                # siguiente modelo — si todos fallan, cae a Gemini en ~pocos s.
+                time.sleep(0.8)
+                idx += 1
                 continue
             break  # error no recuperable -> Gemini
 
