@@ -81,52 +81,9 @@ TOOL_ACCIONES_CADENA = {
 }
 MAX_PASOS_AGENTE = 5  # tope de pasos encadenados por turno (evita bucles)
 
-
-def _extraer_json(texto: str):
-    """Extrae el primer objeto JSON de la respuesta del router de forma ROBUSTA.
-
-    El viejo `re.search(r'\\{.*\\}')` era codicioso: si el modelo devolvía prosa
-    con una llave suelta, o el JSON y luego más texto con llaves, capturaba de
-    la primera '{' a la ÚLTIMA '}' de todo el texto y fallaba. Aquí contamos
-    llaves balanceadas (ignorando las que van dentro de strings) y devolvemos
-    el primer objeto completo y bien formado, o None.
-    """
-    if not texto:
-        return None
-    # Camino rápido: el texto ES el JSON.
-    try:
-        return json.loads(texto)
-    except (json.JSONDecodeError, TypeError):
-        pass
-    inicio = texto.find("{")
-    while inicio != -1:
-        prof = 0
-        en_str = False
-        escape = False
-        for i in range(inicio, len(texto)):
-            c = texto[i]
-            if en_str:
-                if escape:
-                    escape = False
-                elif c == "\\":
-                    escape = True
-                elif c == '"':
-                    en_str = False
-            else:
-                if c == '"':
-                    en_str = True
-                elif c == "{":
-                    prof += 1
-                elif c == "}":
-                    prof -= 1
-                    if prof == 0:
-                        frag = texto[inicio:i + 1]
-                        try:
-                            return json.loads(frag)
-                        except json.JSONDecodeError:
-                            break  # este candidato no sirve; probar la siguiente '{'
-        inicio = texto.find("{", inicio + 1)
-    return None
+# Extracción robusta de JSON del router (llaves balanceadas). Compartida con
+# llm_engine para no duplicar el parser frágil de antes.
+from core.util_json import extraer_json as _extraer_json
 
 
 class LaraCerebro:
@@ -779,8 +736,8 @@ class LaraCerebro:
             try:
                 from core import skills_voz as _sv
                 _sv.detener_voz()
-            except Exception:
-                pass
+            except Exception as e:
+                log_error("detener_voz", str(e))
             self._buffer = []
             return ""  # sin respuesta hablada: solo se detiene
 
@@ -800,8 +757,8 @@ class LaraCerebro:
                 self._buffer = []
                 self._say(f"Listo, hablo más rápido ({v}).")
                 return "\n".join(self._buffer)
-            except Exception:
-                pass
+            except Exception as e:
+                log_error("set_velocidad(+)", str(e))
         if any(f in _p for f in ("habla mas despacio", "habla más despacio", "mas despacio",
                                  "más despacio", "mas lento", "más lento")):
             try:
@@ -810,8 +767,8 @@ class LaraCerebro:
                 self._buffer = []
                 self._say(f"De acuerdo, hablo más despacio ({v}).")
                 return "\n".join(self._buffer)
-            except Exception:
-                pass
+            except Exception as e:
+                log_error("set_velocidad(-)", str(e))
         if _p in ("habla normal", "velocidad normal", "velocidad por defecto"):
             try:
                 from core import skills_voz as _sv

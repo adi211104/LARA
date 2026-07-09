@@ -1307,14 +1307,11 @@ def consultar_gestor_compound(plan_texto: str, fecha_hoy: str) -> dict:
         registrar_groq(respuesta, MODELO_AGENTE)
         raw = respuesta.choices[0].message.content.strip()
 
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            import re
-            match = re.search(r'\{.*\}', raw, re.DOTALL)
-            if match:
-                return json.loads(match.group(0))
-            return {"accion": "error", "params": [], "mensaje": "El gestor no devolvió un JSON válido."}
+        from core.util_json import extraer_json
+        datos = extraer_json(raw)
+        if isinstance(datos, dict):
+            return datos
+        return {"accion": "error", "params": [], "mensaje": "El gestor no devolvió un JSON válido."}
 
     except Exception as e:
         return {"accion": "error", "params": [], "mensaje": f"Error en el gestor (compound): {str(e)}"}
