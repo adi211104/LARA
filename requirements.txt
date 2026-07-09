@@ -1,0 +1,31 @@
+# Núcleo (ya existentes en LARA)
+groq
+google-genai
+python-dotenv
+requests
+plyer
+pillow
+yt-dlp
+
+# Voz: salida (TTS neuronal) y entrada (STT)
+edge-tts
+SpeechRecognition
+sounddevice
+numpy
+miniaudio          # decodifica el mp3 de la voz para elegir dispositivo de salida
+pyttsx3            # respaldo offline de voz
+faster-whisper     # STT LOCAL (offline, menos latencia). Si falta, usa Whisper en la nube (Groq)
+openwakeword       # Wake word LOCAL instantáneo ("hey jarvis"). Si falta, usa el wake word por transcripción
+
+# Lectura/aprendizaje de archivos
+pypdf
+python-docx
+
+# Automatización (mover mouse, teclear, abrir y escribir en programas)
+pyautogui
+pynput
+pygetwindow
+
+# Reconocimiento de voz por hablante (candado de voz)
+scipy
+python_speech_features

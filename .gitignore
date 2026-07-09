@@ -1,0 +1,38 @@
+# === Secretos (NO versionar nunca) ===
+.env
+*.key
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# === Datos y estado en runtime (viven en Taller_IA/, no en el repo) ===
+conocimiento/
+logs/
+workspace/
+skills_pendientes/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# === Modelos / cachés pesados ===
+*.onnx
+*.tflite
+*.gguf
+*.bin
+
+# === Sistema operativo / editor ===
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/

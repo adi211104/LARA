@@ -1,0 +1,5 @@
+# Normaliza finales de línea: el repo guarda LF, Windows usa CRLF localmente.
+* text=auto
+*.py text eol=lf
+*.md text eol=lf
+*.bat text eol=crlf
