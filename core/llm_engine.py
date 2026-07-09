@@ -1298,6 +1298,51 @@ NO converses, NO agregues texto fuera del JSON.
 """
 
 
+def generar_plan(peticion: str, contexto: str = "") -> dict:
+    """
+    Descompone una petición COMPLEJA en pasos concretos y ordenados para el modo
+    agente. Devuelve {"resumen": str, "pasos": [str, ...]}. Si la tarea se
+    resuelve de un tirón, devuelve un solo paso (o ninguno) y el cerebro la
+    maneja por la vía normal de un paso. Nunca lanza: ante fallo, {"pasos": []}.
+    """
+    sistema = (
+        "Eres un PLANIFICADOR para un asistente que controla un Windows (abrir programas, "
+        "buscar en internet, descargar, crear/mover archivos, ejecutar comandos, teclear...). "
+        "Descompón la petición del usuario en una lista CORTA de pasos CONCRETOS y ejecutables, "
+        "EN ORDEN, donde cada paso sea UNA acción clara. Si la petición se hace en un solo paso, "
+        "devuelve un único paso. Máximo 6 pasos, sin relleno. "
+        'Responde SOLO este JSON: {"resumen":"qué se va a lograr","pasos":["paso 1","paso 2"]}'
+    )
+    usuario = peticion if not contexto else f"Contexto:\n{contexto[:1200]}\n\nPetición: {peticion}"
+    from core.util_json import extraer_json
+    # Intento 1: router en la nube (rápido y estructurado). Respaldo: Gemini.
+    for modelo in (_cadena_routers()[0], MODELO_PROFUNDO):
+        try:
+            r = client.chat.completions.create(
+                model=modelo,
+                messages=[{"role": "system", "content": sistema},
+                          {"role": "user", "content": usuario}],
+                temperature=0.2, max_tokens=700,
+                response_format={"type": "json_object"},
+            )
+            registrar_groq(r, modelo)
+            datos = extraer_json((r.choices[0].message.content or "").strip())
+            if isinstance(datos, dict) and isinstance(datos.get("pasos"), list):
+                datos["pasos"] = [str(p).strip() for p in datos["pasos"] if str(p).strip()][:6]
+                return datos
+        except Exception:
+            continue
+    try:
+        raw = _llamar_gemini(sistema, usuario, max_tokens=700, temperature=0.2, json_mode=True)
+        datos = extraer_json(raw)
+        if isinstance(datos, dict) and isinstance(datos.get("pasos"), list):
+            datos["pasos"] = [str(p).strip() for p in datos["pasos"] if str(p).strip()][:6]
+            return datos
+    except Exception:
+        pass
+    return {"resumen": "", "pasos": []}
+
+
 def consultar_gestor_compound(plan_texto: str, fecha_hoy: str) -> dict:
     """
     Recibe el plan en lenguaje natural que generó el router (Llama, vía accion

@@ -6,6 +6,15 @@ Formato: cada versión lista los cambios relevantes. Las novedades históricas
 ## [No publicado] — Endurecimiento y control
 
 ### Añadido
+- **Planner multipaso**: con el modo agente activo, LARA descompone una petición
+  compleja en pasos, te MUESTRA el plan y los ejecuta en orden encadenando
+  resultados (respetando el modo: en 'plan' solo muestra, en 'manual' confirma
+  cada paso de riesgo). `core/llm_engine.generar_plan` + `cerebro.ejecutar_plan`.
+- **Volumen a un nivel exacto**: "pon el audio al 50%" ahora funciona (op de
+  sistema `volumen` 0-100, sin dependencias nuevas).
+- **Auto-recuperación ("halla la manera")**: si LARA no tiene una operación
+  directa para algo, ya no dice "no puedo": re-enruta para lograrlo por otra vía
+  (comando de Windows o proponiendo una skill), con el gate de modos de por medio.
 - **RAG sobre tus documentos** (`core/rag_documentos.py`): LARA indexa el
   contenido de tus PDF, Word, TXT y Markdown (carpeta `Taller_IA/documentos_rag`
   y `workspace`) y responde CITANDO el archivo de origen. Usa los embeddings
@@ -40,3 +49,8 @@ Formato: cada versión lista los cambios relevantes. Las novedades históricas
 ### Corregido
 - Errores antes silenciados (`except: pass`) ahora se registran en el log.
 - Comentario obsoleto sobre `llama-3.3-70b` (ya no se usa en el código).
+- **Voz más rápida**: el silencio final que dispara la transcripción baja de
+  1.5s a 0.8s y Whisper pasa a decodificación greedy (~2-3x más rápido); se
+  silencia el aviso de symlinks de HuggingFace.
+- **Nube más ágil ante caídas**: ante 500/503 ya no se duerme ~18s reintentando
+  el mismo modelo; pasa al siguiente y, si todos caen, a Gemini en pocos segundos.

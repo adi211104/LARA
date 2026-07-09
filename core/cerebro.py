@@ -26,7 +26,7 @@ from core.llm_engine import (
     consultar_lara, generar_prompt_sistema, buscar_en_web, consultar_gestor_compound,
     refinar_query_busqueda, generar_codigo_grande, resumir_pagina_web,
     responder_con_datos, razonar_profundo, razonar_profundo_stream,
-    resumir_turnos_antiguos,
+    resumir_turnos_antiguos, generar_plan,
 )
 from core.skills_os import (
     ejecutar_cmd, ejecutar_cmd_admin, ejecutar_codigo_python, ejecutar_codigo_visible,
@@ -224,6 +224,52 @@ class LaraCerebro:
         self._undo.append((descripcion, accion_inversa))
         if len(self._undo) > 20:
             self._undo = self._undo[-20:]
+
+    def ejecutar_plan(self, peticion: str):
+        """Planner multipaso: descompone una petición compleja en pasos, los
+        MUESTRA y los ejecuta en orden, encadenando resultados. Cada paso pasa
+        por el gate de modos (en 'manual' confirmas los de riesgo; en 'plan'
+        solo se muestra el plan sin ejecutar). Devuelve el texto de salida, o
+        None si NO era multipaso (para que el cerebro lo resuelva de un tiro).
+        """
+        self._status("Planificando los pasos...")
+        try:
+            plan = generar_plan(peticion, self.contexto_ejecucion)
+        except Exception as e:
+            log_error("generar_plan", str(e))
+            return None
+        pasos = plan.get("pasos") or []
+        if len(pasos) <= 1:
+            return None  # de un solo paso: que lo maneje la vía normal
+
+        resumen = (plan.get("resumen") or "").strip()
+        listado = "\n".join(f"  {i}. {p}" for i, p in enumerate(pasos, 1))
+        self._say((f"Plan — {resumen}:\n{listado}" if resumen else f"Plan:\n{listado}"),
+                  hablar=False)
+
+        if modos.get_modo() == "plan":
+            self._say("Estoy en modo plan, así que no lo ejecuto. Di 'modo auto' o "
+                      "'modo manual' y repítelo para que lo lleve a cabo.")
+            return "\n".join(self._buffer)
+
+        for i, paso in enumerate(pasos, 1):
+            self._status(f"Paso {i}/{len(pasos)}: {paso}")
+            instruccion = (
+                f"Estás EJECUTANDO el paso {i} de {len(pasos)} de un plan. "
+                f"Paso actual: {paso}. Usa los resultados de los pasos anteriores (están en el "
+                f"historial) si hacen falta. Ejecuta SOLO este paso con la acción adecuada; "
+                f"si el paso ya está cumplido, usa accion=hablar y dilo brevemente.")
+            try:
+                sys_prompt = generar_prompt_sistema(self.contexto_ejecucion)
+                decision = consultar_lara(instruccion, sys_prompt, self.historial[-8:])
+                self.historial.append({"role": "assistant", "content": decision})
+                self._procesar_respuesta_llm(decision)
+            except Exception as e:
+                log_error("ejecutar_plan.paso", str(e))
+                self._say(f"Me atasqué en el paso {i} ({paso}). Paro el plan aquí.")
+                break
+        self._say("Plan completado.", hablar=False)
+        return "\n".join(self._buffer)
 
     def _recuperar_capacidad(self, operacion: str, valor: str) -> None:
         """LARA no tenía una operación directa para algo: en vez de rendirse,
@@ -1059,6 +1105,18 @@ class LaraCerebro:
         if tema:
             self._status(f"Preparando explicación de {tema}...")
             return self.explicar_visual(tema)
+
+        # Planner multipaso: con el modo agente ACTIVO, primero se planifica la
+        # tarea y se ejecutan los pasos en orden. Si resulta ser de un solo paso,
+        # ejecutar_plan devuelve None y seguimos por la vía normal de un tiro.
+        if self.modo_agente:
+            plan_salida = self.ejecutar_plan(prompt)
+            if plan_salida is not None:
+                limpio = "\n".join(self._buffer)
+                if limpio.strip():
+                    self._persistir("assistant", limpio)
+                    self._ultima_respuesta = limpio
+                return limpio
 
         respuesta_llm = consultar_lara(prompt, sys_prompt, self.historial[-6:])
         self.historial.append({"role": "assistant", "content": respuesta_llm})
