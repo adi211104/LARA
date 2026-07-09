@@ -11,6 +11,7 @@ Para la experiencia completa (gráfica, voz, subir archivos), ejecuta:  python g
 """
 
 from config import ADMIN_NOMBRE
+from core import modos
 from core.cerebro import LaraCerebro
 from core.agente_fondo import iniciar_agente_fondo, set_voz_alertas
 from core.skills_registry import auto_registrar_skills_core
@@ -24,13 +25,24 @@ def main():
     print("  'lara escucha' (manos libres: te activa al decir 'Lara'), 'reunion on/off',")
     print("  'opina' (analiza lo escuchado), 'acta' (guarda la reunión), 'pantalla', 'q' salir.")
 
+    def _confirmar_consola(accion, descripcion):
+        """Pregunta por consola antes de una acción de riesgo (modo manual)."""
+        try:
+            r = input(f"[CONFIRMAR] LARA quiere {descripcion}. ¿Autorizas? (s/N): ").strip().lower()
+        except EOFError:
+            return False
+        return r in ("s", "si", "sí", "y", "yes")
+
     cerebro = LaraCerebro(
         on_status=lambda m: print(f"[{m}]"),
         on_speak=lambda m: skills_voz.hablar(m),
         # Voz en STREAMING para el razonamiento profundo: Lara empieza a hablar
         # apenas tiene la primera frase, sin esperar a terminar toda la respuesta.
         on_speak_stream=lambda gen: skills_voz.hablar_stream(gen),
+        on_confirm=_confirmar_consola,
     )
+    print(f"[LARA] Modo de operación: {modos.get_modo()} — {modos.DESCRIPCION[modos.get_modo()]}")
+    print("       Cámbialo con: 'modo auto' / 'modo manual' / 'modo plan' / 'modo lectura'.")
     skills_voz.set_voz_activa(False)  # en consola, silenciosa por defecto
 
     # Precargar Whisper LOCAL en segundo plano (offline, menos latencia). Si no

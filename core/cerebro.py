@@ -50,7 +50,7 @@ from core.skills_propuestas import proponer_skill, listar_propuestas_pendientes,
 from core.skills_registry import cargar_registro, ejecutar_skill_registrada
 from core.skills_novedades import listar_novedades, marcar_novedades_leidas, registrar_limitacion
 from core.skills_vision import analizar_pantalla, analizar_imagen, analizar_archivo, aprender_de_archivo
-from core import sesiones
+from core import sesiones, modos
 
 
 # Tabla de despacho para el GESTOR (compound). Idéntica a la de main.py original.
@@ -82,9 +82,57 @@ TOOL_ACCIONES_CADENA = {
 MAX_PASOS_AGENTE = 5  # tope de pasos encadenados por turno (evita bucles)
 
 
+def _extraer_json(texto: str):
+    """Extrae el primer objeto JSON de la respuesta del router de forma ROBUSTA.
+
+    El viejo `re.search(r'\\{.*\\}')` era codicioso: si el modelo devolvía prosa
+    con una llave suelta, o el JSON y luego más texto con llaves, capturaba de
+    la primera '{' a la ÚLTIMA '}' de todo el texto y fallaba. Aquí contamos
+    llaves balanceadas (ignorando las que van dentro de strings) y devolvemos
+    el primer objeto completo y bien formado, o None.
+    """
+    if not texto:
+        return None
+    # Camino rápido: el texto ES el JSON.
+    try:
+        return json.loads(texto)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    inicio = texto.find("{")
+    while inicio != -1:
+        prof = 0
+        en_str = False
+        escape = False
+        for i in range(inicio, len(texto)):
+            c = texto[i]
+            if en_str:
+                if escape:
+                    escape = False
+                elif c == "\\":
+                    escape = True
+                elif c == '"':
+                    en_str = False
+            else:
+                if c == '"':
+                    en_str = True
+                elif c == "{":
+                    prof += 1
+                elif c == "}":
+                    prof -= 1
+                    if prof == 0:
+                        frag = texto[inicio:i + 1]
+                        try:
+                            return json.loads(frag)
+                        except json.JSONDecodeError:
+                            break  # este candidato no sirve; probar la siguiente '{'
+        inicio = texto.find("{", inicio + 1)
+    return None
+
+
 class LaraCerebro:
     def __init__(self, on_status=None, on_speak=None, on_holograma=None,
-                 espacio="chat", session_id=None, on_speak_stream=None):
+                 espacio="chat", session_id=None, on_speak_stream=None,
+                 on_confirm=None):
         self.espacio = espacio
         self.session_id = session_id or sesiones.crear_sesion(espacio)
         self.historial = sesiones.turnos_como_historial(espacio, self.session_id, n=12)
@@ -116,6 +164,15 @@ class LaraCerebro:
         self._ultima_accion = ""       # última acción despachada (para el bucle)
         self.voz_concisa = True        # respuestas HABLADAS breves (fluidez por voz)
         self._ultima_respuesta = ""    # última respuesta dada (para "repite")
+        # Confirmación de acciones de riesgo (modos manual/plan/lectura). El
+        # llamador (consola/GUI) provee cómo preguntar al usuario; si no hay
+        # forma de preguntar, en modo manual se ejecuta igual (es TU equipo) pero
+        # queda auditado. Devuelve True para autorizar, False para cancelar.
+        self._on_confirm = on_confirm
+        # Serializa procesar(): GUI, wake word y voz pueden llamar a la vez.
+        self._lock = threading.RLock()
+        # Pila de acciones REVERSIBLES de la sesión (para "deshaz lo último").
+        self._undo = []
 
     # ── sesiones ──────────────────────────────────────────────
     def _persistir(self, role: str, content: str):
@@ -161,6 +218,65 @@ class LaraCerebro:
     def set_modo_agente(self, activo: bool) -> None:
         """Enciende/apaga el modo agente (encadenar pasos automáticamente)."""
         self.modo_agente = bool(activo)
+
+    # ── Autorización de acciones de riesgo (modos / sandbox) ──────────────────
+    # Texto legible de cada acción, para el mensaje de confirmación o el plan.
+    _VERBO_ACCION = {
+        "cmd": "ejecutar el comando", "cmd_admin": "ejecutar como ADMINISTRADOR",
+        "ejecutar_codigo": "ejecutar código Python", "ejecutar_codigo_visible": "ejecutar código Python (visible)",
+        "mover_archivo": "mover el archivo", "copiar_archivo": "copiar el archivo",
+        "crear": "crear el archivo", "escribir": "teclear el texto",
+        "escribir_en": "abrir y escribir en", "abrir_y_escribir": "abrir y escribir en",
+        "clic": "hacer clic en", "presionar": "presionar las teclas", "teclas": "presionar las teclas",
+        "descargar": "descargar", "descargar_video": "descargar el video",
+        "proponer_skill": "generar la skill", "aceptar_propuesta": "INSTALAR la skill",
+        "ejecutar_skill": "ejecutar la skill", "sistema": "la operación de sistema",
+    }
+
+    def _describir_accion(self, accion: str, params, mensaje: str = "") -> str:
+        verbo = self._VERBO_ACCION.get(accion, accion)
+        detalle = ""
+        if params:
+            detalle = " ".join(str(p) for p in params[:2])
+            if len(detalle) > 300:
+                detalle = detalle[:300] + "…"
+        return f"{verbo} {detalle}".strip()
+
+    def _confirmar(self, accion: str, params, mensaje: str = "") -> bool:
+        """Pregunta al usuario antes de una acción de riesgo (modo manual).
+
+        Usa el callback on_confirm que provee la GUI/consola. Si no hay ninguno
+        (nadie a quien preguntar), autoriza —es TU equipo— pero deja rastro en
+        la auditoría; la seguridad real la dan los modos 'plan'/'lectura'."""
+        desc = self._describir_accion(accion, params, mensaje)
+        if self._on_confirm is None:
+            modos.auditar(accion, params, "sin-UI-de-confirmacion:auto-autorizado")
+            return True
+        try:
+            return bool(self._on_confirm(accion, desc))
+        except Exception as e:
+            log_error("on_confirm", str(e))
+            return False
+
+    # ── Deshacer (undo) ───────────────────────────────────────────────────────
+    def _registrar_undo(self, descripcion: str, accion_inversa) -> None:
+        """Apila una acción reversible. 'accion_inversa' es un callable sin
+        argumentos que revierte lo hecho (se llama en 'deshaz lo último')."""
+        self._undo.append((descripcion, accion_inversa))
+        if len(self._undo) > 20:
+            self._undo = self._undo[-20:]
+
+    def _deshacer_ultimo(self) -> str:
+        if not self._undo:
+            return "No hay nada reciente que pueda deshacer."
+        descripcion, inversa = self._undo.pop()
+        try:
+            inversa()
+            modos.auditar("deshacer", [descripcion], "ok")
+            return f"Listo, deshice: {descripcion}."
+        except Exception as e:
+            log_error("deshacer", str(e))
+            return f"No pude deshacer '{descripcion}' — {e}"
 
     def _razonar_profundo_decir(self, pregunta_original: str) -> str:
         """
@@ -611,6 +727,12 @@ class LaraCerebro:
         return None
 
     def procesar(self, prompt: str, hablante: str | None = None) -> str:
+        """Procesa un turno. Serializado con un lock para que GUI, wake word y
+        voz (que pueden entrar a la vez) no se pisen el historial ni el buffer."""
+        with self._lock:
+            return self._procesar(prompt, hablante)
+
+    def _procesar(self, prompt: str, hablante: str | None = None) -> str:
         """Procesa un mensaje del usuario y devuelve la respuesta de LARA (texto).
 
         'hablante' (opcional) es el nombre identificado por voz_id: si no es el
@@ -618,6 +740,23 @@ class LaraCerebro:
         Las llamadas antiguas con un solo argumento siguen funcionando igual.
         """
         self.hablante_actual = hablante
+
+        # ── Cambio de modo por voz/texto ("modo auto", "modo plan"...) ──
+        modo_destino = modos.detectar_cambio_modo(prompt)
+        if modo_destino:
+            modos.set_modo(modo_destino)
+            self._buffer = []
+            self._say(f"Cambiado. {modos.DESCRIPCION[modo_destino]}")
+            return "\n".join(self._buffer)
+
+        # ── Deshacer la última acción reversible ("deshaz lo último") ──
+        _pu = prompt.lower().strip().strip(".!?¡¿")
+        if _pu in ("deshaz", "deshazlo", "deshaz lo ultimo", "deshaz lo último",
+                   "deshacer", "revierte", "revierte lo ultimo", "revierte lo último",
+                   "undo", "cancela lo ultimo", "cancela lo último"):
+            self._buffer = []
+            self._say(self._deshacer_ultimo())
+            return "\n".join(self._buffer)
 
         # Toggle del modo agente por voz/texto (Mejora b).
         _p = prompt.lower().strip().strip(".!?¡¿")
@@ -928,17 +1067,8 @@ class LaraCerebro:
     # ── despacho de la decisión del router (puerto de main.py) ───
     def _procesar_respuesta_llm(self, respuesta: str):
         self.contexto_ejecucion = ""
-        datos = None
-        try:
-            datos = json.loads(respuesta)
-        except json.JSONDecodeError:
-            match = re.search(r'\{.*\}', respuesta, re.DOTALL)
-            if match:
-                try:
-                    datos = json.loads(match.group(0))
-                except json.JSONDecodeError:
-                    pass
-        if datos is None:
+        datos = _extraer_json(respuesta)
+        if not isinstance(datos, dict):
             self._say(respuesta)
             return
 
@@ -947,6 +1077,21 @@ class LaraCerebro:
         mensaje = datos.get("mensaje", "")
         requiere_profundo = datos.get("requiere_razonamiento_profundo", False)
         self._ultima_accion = accion  # para el bucle del modo agente
+
+        # ── Gate de modos / sandbox ──────────────────────────────────────────
+        # Un único punto de control cubre TODAS las acciones de riesgo. Según el
+        # modo activo (auto/manual/plan/lectura) la acción se ejecuta, se pide
+        # confirmación, o se bloquea describiéndola. Lo inocuo (hablar, buscar,
+        # leer, consultas) pasa siempre sin fricción.
+        decision, motivo = modos.evaluar(accion, params)
+        if decision == modos.BLOQUEAR:
+            self._say(f"{motivo}\n\n▸ Acción que pediste: {self._describir_accion(accion, params, mensaje)}")
+            return
+        if decision == modos.CONFIRMAR:
+            if not self._confirmar(accion, params, mensaje):
+                self._say("De acuerdo, no lo hago.")
+                return
+            modos.auditar(accion, params)
 
         # Anti-desactualización: si el modelo responde "no hay datos/no se ha
         # publicado/consulta tú mismo", es su entrenamiento viejo hablando.
@@ -1316,6 +1461,14 @@ class LaraCerebro:
             self._say(f"Abriendo {nombre_real}.{extra}")
         elif mensaje:
             self._say(mensaje)
+
+        # Registrar "deshacer" para acciones reversibles (por ahora, mover_archivo).
+        if accion == "mover_archivo" and "error" not in resultado:
+            org, dst = resultado.get("origen"), resultado.get("destino")
+            if org and dst:
+                self._registrar_undo(
+                    f"mover «{dst}» de vuelta a «{org}»",
+                    lambda o=dst, d=org: mover_archivo(o, d))
 
         # Para acciones que devuelven contenido visible (listar/leer), mostrarlo
         if accion == "listar" and "contenido" in resultado:

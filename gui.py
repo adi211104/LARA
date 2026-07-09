@@ -81,6 +81,7 @@ class LaraGUI:
             # Voz en STREAMING: en respuestas profundas LARA empieza a hablar
             # apenas tiene la primera frase (el texto final se imprime al terminar).
             on_speak_stream=lambda gen: skills_voz.hablar_stream(gen),
+            on_confirm=self._confirmar_gui,
         )
         skills_voz.set_voz_activa(True)
 
@@ -90,6 +91,27 @@ class LaraGUI:
         threading.Thread(target=self._worker_proceso, daemon=True).start()
         self._saludo()
         self._iniciar_escucha()
+
+    # ── confirmación de acciones de riesgo (modo manual) ──────────────────────
+    def _confirmar_gui(self, accion, descripcion):
+        """Pregunta al usuario antes de una acción de riesgo. El procesamiento
+        corre en un hilo worker, así que la ventana de confirmación se lanza en
+        el hilo de Tk (root.after) y este hilo espera la respuesta."""
+        from tkinter import messagebox
+        resultado = {"ok": False}
+        listo = threading.Event()
+
+        def _preguntar():
+            try:
+                resultado["ok"] = messagebox.askyesno(
+                    "LARA — Confirmar acción",
+                    f"LARA quiere {descripcion}.\n\n¿Autorizas esta acción?")
+            finally:
+                listo.set()
+
+        self.root.after(0, _preguntar)
+        listo.wait(timeout=120)   # si nadie responde en 2 min, se cancela
+        return resultado["ok"]
 
     # ── cola de procesamiento (un solo trabajador, entrada no bloqueante) ──
     def _encolar(self, funcion, etiqueta_usuario=None):
@@ -112,6 +134,12 @@ class LaraGUI:
             # Refrescar la etiqueta de motor: qué cerebro respondió este turno
             try:
                 self.root.after(0, lambda: self.lbl_modelo.config(text=self._modelo_activo()))
+            except Exception:
+                pass
+            # Sincronizar el selector de modo (por si se cambió por voz/texto)
+            try:
+                from core import modos as _modos
+                self.root.after(0, lambda: self.var_modo.set(_modos.get_modo()))
             except Exception:
                 pass
             self._cola.task_done()
@@ -241,6 +269,26 @@ class LaraGUI:
                           activebackground=ACENTO, activeforeground=PANEL)
         om.pack(side="right", padx=4)
         tk.Label(fila, text="Esfuerzo", font=FUENTE, fg=SUAVE, bg=FONDO).pack(side="right", padx=(0, 2))
+
+        # Selector de MODO (auto / manual / plan / lectura), estilo Claude Code.
+        from core import modos as _modos
+        self.var_modo = tk.StringVar(value=_modos.get_modo())
+        om_modo = tk.OptionMenu(fila, self.var_modo, *_modos.NIVELES, command=self._cambiar_modo)
+        om_modo.config(bg=FONDO, fg=ACENTO, font=FUENTE, relief="flat", bd=0,
+                       highlightthickness=1, highlightbackground=BORDE,
+                       activebackground=ACENTO, activeforeground=PANEL, cursor="hand2")
+        om_modo["menu"].config(bg=PANEL, fg=TEXTO, font=FUENTE,
+                               activebackground=ACENTO, activeforeground=PANEL)
+        om_modo.pack(side="left", padx=4)
+        tk.Label(fila, text="Modo", font=FUENTE, fg=SUAVE, bg=FONDO).pack(side="left", padx=(0, 2))
+
+    def _cambiar_modo(self, modo):
+        from core import modos as _modos
+        _modos.set_modo(modo)
+        try:
+            self._status_safe(f"Modo: {modo} — {_modos.DESCRIPCION.get(modo, '')}")
+        except Exception:
+            pass
 
     def _modelo_activo(self) -> str:
         # Tras cada turno muestra QUÉ MOTOR respondió de verdad (⚡ reflejo /
