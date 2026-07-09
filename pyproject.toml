@@ -1,0 +1,42 @@
+[project]
+name = "lara-asistente"
+version = "11.0.0"
+description = "LARA — asistente de escritorio tipo JARVIS para Windows (cerebro híbrido local + nube, voz, visión, memoria)."
+readme = "LEEME.md"
+requires-python = ">=3.12"
+authors = [{ name = "Adi" }]
+
+# Dependencias de ejecución. La lista canónica y comentada sigue en
+# requirements.txt (que usa INICIAR_LARA.bat); aquí se replican para que
+# `pip install .` o herramientas de empaquetado funcionen.
+dependencies = [
+    "groq",
+    "google-genai",
+    "python-dotenv",
+    "requests",
+    "plyer",
+    "pillow",
+    "yt-dlp",
+    "edge-tts",
+    "SpeechRecognition",
+    "sounddevice",
+    "numpy",
+    "miniaudio",
+    "pyttsx3",
+    "faster-whisper",
+    "openwakeword",
+    "pypdf",
+    "python-docx",
+    "pyautogui",
+    "pynput",
+    "pygetwindow",
+    "scipy",
+    "python_speech_features",
+]
+
+[project.scripts]
+lara = "main:main"
+
+[tool.setuptools]
+py-modules = ["main", "config", "ui_tema", "gui", "gui_explicacion", "gui_opencode"]
+packages = ["core"]

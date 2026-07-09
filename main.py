@@ -20,7 +20,7 @@ from core import skills_voz, rutinas
 
 
 def main():
-    print("--- LARA v9.5 Windows Edition (consola) ---")
+    print("--- LARA v11 Windows Edition (consola) ---")
     print(f"Sistema activo, {ADMIN_NOMBRE}. Comandos: 'voz on/off', 'escuchar' (hablarle una vez),")
     print("  'lara escucha' (manos libres: te activa al decir 'Lara'), 'reunion on/off',")
     print("  'opina' (analiza lo escuchado), 'acta' (guarda la reunión), 'pantalla', 'q' salir.")

@@ -57,14 +57,17 @@ genai_client = genai.Client(api_key=gemini_api_key,
                             http_options=types.HttpOptions(timeout=60000))  # ms
 client = Groq(api_key=groq_api_key, timeout=45.0, max_retries=2)  # router y compound
 
-# Cadena de routers por orden de preferencia. gpt-oss-120b es el reemplazo oficial
-# que recomendó Groq al retirar llama-3.3-70b (deprecado, se apaga el 16/08/2026):
-# potente (nivel frontier) y rápido (~1.2s). Si un modelo falla (429/403/retirado),
-# LARA baja al siguiente automáticamente y recuerda cuál funcionó.
+# Cadena de routers por orden de preferencia. gpt-oss-120b y qwen3.6-27b son los
+# reemplazos oficiales que recomendó Groq al retirar llama-3.3-70b-versatile
+# (decomisionado el 16/08/2026; LARA ya NO lo usa). Si un modelo falla
+# (429/403/retirado), LARA baja al siguiente automáticamente y recuerda cuál
+# funcionó. qwen3-32b tiene límites de tasa más altos (60 RPM / 500K tok-día):
+# buen colchón cuando gpt-oss-120b (30 RPM / 200K) se satura en ráfagas.
 ROUTERS = [
     "openai/gpt-oss-120b",      # 1º: el más inteligente disponible gratis
     "qwen/qwen3.6-27b",         # 2º: reemplazo alterno recomendado por Groq
-    "llama-3.1-8b-instant",     # 3º: ultrarrápido, para ráfagas
+    "qwen/qwen3-32b",           # 3º: más cuota (60 RPM/500K), aguanta ráfagas
+    "llama-3.1-8b-instant",     # 4º: ultrarrápido, último recurso
 ]
 _router_idx = 0                  # índice del router activo dentro de la cadena del nivel (se auto-ajusta)
 _router_nivel = None             # nivel con el que se calculó _router_idx (si cambia, se resetea)
