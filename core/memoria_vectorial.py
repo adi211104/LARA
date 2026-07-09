@@ -11,35 +11,42 @@ Ejemplo: hace semanas dijiste "el cliente del amplificador Marshall paga los
 viernes". Hoy preguntas "¿cuándo cobro lo del ampli?" — la búsqueda por
 palabras no lo encontraría, pero la semántica sí.
 
-Diseño a prueba de fallos (v10.2: embeddings LOCALES primero):
-  - Embeddings con Ollama (embeddinggemma, multilingüe) EN TU PC: recordar()
-    corre en CADA turno, y hacerlo local quita una llamada a Gemini por turno
-    (latencia + cuota) y funciona sin internet.
-  - Si el modelo local no está, cae a Gemini (text-embedding-004) como antes.
+Almacenamiento (v11: SQLite en vez de un JSON monolítico):
+  - Antes TODO vivía en un único memoria_vectorial.json que se REESCRÍBIA ENTERO
+    en cada guardado (a miles de recuerdos, escribir 4000 entradas por cada
+    turno es lento y arriesga corromper el archivo si se corta a medias).
+  - Ahora cada recuerdo es una fila en KNOWLEDGE_DIR/memoria_vectorial.sqlite3:
+    insertar es una sola fila, buscar es un SELECT, y el archivo no se reescribe
+    completo nunca. El JSON antiguo se MIGRA automáticamente la primera vez.
+  - Dedup: no se guardan textos idénticos ya presentes.
+
+Diseño de embeddings (sin cambios respecto a v10.2):
+  - Embeddings con Ollama (embeddinggemma, multilingüe) EN TU PC primero.
+  - Si el modelo local no está, cae a Gemini (text-embedding-004).
   - Si no hay ninguno, cae a búsqueda por solapamiento de palabras.
-  - IMPORTANTE: vectores de modelos distintos NO son comparables entre sí
-    (espacios diferentes). Cada entrada guarda con qué modelo se calculó
-    ("vec_modelo") y solo se compara contra la consulta embebida con ESE
-    mismo modelo. Las entradas viejas (Gemini) se MIGRAN al modelo local en
-    segundo plano la primera vez que se detectan, sin bloquear nada.
-  - Todo se guarda en KNOWLEDGE_DIR/memoria_vectorial.json (sincronizado por
-    OneDrive como el resto de la memoria de Lara).
+  - Vectores de modelos distintos NO son comparables (espacios diferentes):
+    cada fila guarda con qué modelo se calculó ("vec_modelo") y solo se compara
+    contra la consulta embebida con ESE mismo modelo. Las entradas viejas
+    (Gemini) se migran al modelo local en segundo plano.
 """
 
 import json
 import math
+import sqlite3
 import threading
 import unicodedata
 from datetime import datetime
 
 from config import KNOWLEDGE_DIR
 
-RUTA = KNOWLEDGE_DIR / "memoria_vectorial.json"
+RUTA_DB = KNOWLEDGE_DIR / "memoria_vectorial.sqlite3"
+RUTA_JSON_LEGADO = KNOWLEDGE_DIR / "memoria_vectorial.json"   # se migra si existe
 MODELO_EMBED_GEMINI = "text-embedding-004"
 MAX_ENTRADAS = 4000        # tope: la memoria no crece infinita
 _lock = threading.Lock()
 _embed_estado_gemini = None    # None=por probar, True=ok, False=no disponible
 _migracion_lanzada = False     # migrar gemini->local solo una vez por sesión
+_db_lista = False              # esquema creado + JSON legado importado
 
 # Frases sin valor para recordar (ruido conversacional). No se indexan.
 _TRIVIAL = {"ok", "vale", "gracias", "hola", "adios", "adiós", "chau", "si", "sí",
@@ -52,20 +59,78 @@ _RUIDO_INICIO = ("no tengo ese dato", "no tengo el dato", "error", "tuve un prob
                  "lo siento", "no encontré resultados", "no encontre resultados")
 
 
-def _cargar() -> list:
-    if RUTA.exists():
-        try:
-            return json.loads(RUTA.read_text(encoding="utf-8"))
-        except Exception:
-            return []
-    return []
+# ── Almacenamiento SQLite ─────────────────────────────────────────────────────
+def _conectar() -> sqlite3.Connection:
+    """Abre una conexión nueva (thread-safe: una por operación). Crea el esquema
+    y migra el JSON antiguo la primera vez."""
+    global _db_lista
+    RUTA_DB.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(str(RUTA_DB), timeout=10)
+    if not _db_lista:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS recuerdos (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                texto      TEXT NOT NULL,
+                role       TEXT,
+                fecha      TEXT,
+                vec        TEXT,          -- vector como JSON, o NULL
+                vec_modelo TEXT
+            )""")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_texto ON recuerdos(texto)")
+        con.commit()
+        _importar_json_legado(con)
+        _db_lista = True
+    return con
 
 
-def _guardar(data: list) -> None:
+def _importar_json_legado(con: sqlite3.Connection) -> None:
+    """Si existe el memoria_vectorial.json viejo y la tabla está vacía, lo
+    importa una vez y renombra el JSON a .migrado para no reimportar."""
     try:
-        RUTA.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        if not RUTA_JSON_LEGADO.exists():
+            return
+        (n,) = con.execute("SELECT COUNT(*) FROM recuerdos").fetchone()
+        if n > 0:
+            return
+        datos = json.loads(RUTA_JSON_LEGADO.read_text(encoding="utf-8"))
+        filas = []
+        for d in datos:
+            vec = d.get("vec")
+            filas.append((
+                d.get("texto", ""), d.get("role", ""), d.get("fecha", ""),
+                json.dumps(vec) if vec else None, d.get("vec_modelo") or "",
+            ))
+        con.executemany(
+            "INSERT INTO recuerdos(texto, role, fecha, vec, vec_modelo) VALUES (?,?,?,?,?)",
+            filas)
+        con.commit()
+        RUTA_JSON_LEGADO.rename(RUTA_JSON_LEGADO.with_suffix(".json.migrado"))
+        print(f"[LARA] Memoria migrada a SQLite: {len(filas)} recuerdos importados.")
+    except Exception as e:
+        print(f"[LARA] No pude migrar la memoria antigua: {e}")
+
+
+def _fila_a_dict(row) -> dict:
+    idv, texto, role, fecha, vec, vec_modelo = row
+    return {
+        "id": idv, "texto": texto, "role": role or "", "fecha": fecha or "",
+        "vec": json.loads(vec) if vec else None, "vec_modelo": vec_modelo or "",
+    }
+
+
+def _cargar() -> list:
+    """Todos los recuerdos como lista de dicts (misma forma que la versión JSON)."""
+    try:
+        con = _conectar()
+        try:
+            rows = con.execute(
+                "SELECT id, texto, role, fecha, vec, vec_modelo FROM recuerdos ORDER BY id"
+            ).fetchall()
+            return [_fila_a_dict(r) for r in rows]
+        finally:
+            con.close()
     except Exception:
-        pass
+        return []
 
 
 def _normalizar(t: str) -> str:
@@ -170,20 +235,29 @@ def indexar(texto: str, role: str = "user") -> None:
     # El embedding se calcula FUERA del lock (puede tardar; local ~0.1s, nube ~0.5s)
     vec, modelo = _embedding(limpio)
     with _lock:
-        datos = _cargar()
-        # Evitar duplicar lo último idéntico
-        if datos and datos[-1].get("texto", "").strip() == limpio:
+        try:
+            con = _conectar()
+        except Exception:
             return
-        datos.append({
-            "texto": limpio,
-            "role": role,
-            "fecha": datetime.now().isoformat(timespec="minutes"),
-            "vec": vec,             # puede ser None si no hubo embeddings
-            "vec_modelo": modelo,   # con qué modelo se calculó (no son mezclables)
-        })
-        if len(datos) > MAX_ENTRADAS:
-            datos = datos[-MAX_ENTRADAS:]
-        _guardar(datos)
+        try:
+            # Dedup: si ese texto EXACTO ya está, no lo repetimos.
+            existe = con.execute(
+                "SELECT 1 FROM recuerdos WHERE texto = ? LIMIT 1", (limpio,)).fetchone()
+            if existe:
+                return
+            con.execute(
+                "INSERT INTO recuerdos(texto, role, fecha, vec, vec_modelo) VALUES (?,?,?,?,?)",
+                (limpio, role, datetime.now().isoformat(timespec="minutes"),
+                 json.dumps(vec) if vec else None, modelo or ""))
+            # Enforzar el tope: borrar los más viejos si pasamos de MAX_ENTRADAS.
+            (n,) = con.execute("SELECT COUNT(*) FROM recuerdos").fetchone()
+            if n > MAX_ENTRADAS:
+                con.execute(
+                    "DELETE FROM recuerdos WHERE id IN "
+                    "(SELECT id FROM recuerdos ORDER BY id LIMIT ?)", (n - MAX_ENTRADAS,))
+            con.commit()
+        finally:
+            con.close()
 
 
 def recordar(consulta: str, k: int = 4, umbral: float = 0.55) -> list:
@@ -243,7 +317,15 @@ def recordar(consulta: str, k: int = 4, umbral: float = 0.55) -> list:
 
 
 def total() -> int:
-    return len(_cargar())
+    try:
+        con = _conectar()
+        try:
+            (n,) = con.execute("SELECT COUNT(*) FROM recuerdos").fetchone()
+            return n
+        finally:
+            con.close()
+    except Exception:
+        return 0
 
 
 def _migrar_en_fondo_si_hace_falta(datos: list) -> None:
@@ -275,11 +357,9 @@ def reindexar_embeddings(limite: int = 200) -> int:
     (no había internet) y las de OTRO modelo (p. ej. Gemini) cuando el modelo
     local ya está disponible — así toda la memoria converge al modelo local.
     Los embeddings se calculan FUERA del lock (esto puede tardar minutos) y se
-    aplican al final en una pasada corta, para no bloquear a indexar()/recordar().
-    Devuelve cuántas entradas actualizó.
+    aplican por fila (UPDATE por id). Devuelve cuántas entradas actualizó.
     """
-    with _lock:
-        datos = _cargar()
+    datos = _cargar()
     ll = _llm_local()
     etiqueta_local = ""
     try:
@@ -288,7 +368,7 @@ def reindexar_embeddings(limite: int = 200) -> int:
     except Exception:
         pass
 
-    nuevos = {}          # texto -> (vec, modelo)
+    nuevos = {}          # id -> (vec, modelo)
     n = 0
     for d in datos:
         if n >= limite:
@@ -299,19 +379,21 @@ def reindexar_embeddings(limite: int = 200) -> int:
             continue
         vec, modelo = _embedding(d.get("texto", ""))
         if vec and modelo != modelo_actual:
-            nuevos[d.get("texto", "")] = (vec, modelo)
+            nuevos[d["id"]] = (vec, modelo)
             n += 1
 
     if not nuevos:
         return 0
     with _lock:
-        datos = _cargar()      # releer: pudo cambiar mientras calculábamos
-        aplicados = 0
-        for d in datos:
-            par = nuevos.get(d.get("texto", ""))
-            if par:
-                d["vec"], d["vec_modelo"] = par
-                aplicados += 1
-        if aplicados:
-            _guardar(datos)
-        return aplicados
+        try:
+            con = _conectar()
+        except Exception:
+            return 0
+        try:
+            for idv, (vec, modelo) in nuevos.items():
+                con.execute("UPDATE recuerdos SET vec = ?, vec_modelo = ? WHERE id = ?",
+                            (json.dumps(vec), modelo, idv))
+            con.commit()
+            return len(nuevos)
+        finally:
+            con.close()
