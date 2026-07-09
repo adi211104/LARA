@@ -462,6 +462,14 @@ def escuchar(espera_inicio: float = 8.0, fin_silencio: float = None,
     except Exception as e:
         return {"error": f"No pude usar el micrófono: {e}"}
 
+    return transcribir_crudo(crudo, sr_rate, voz_dur, t_voz)
+
+
+def transcribir_crudo(crudo, sr_rate, voz_dur, t_voz) -> dict:
+    """Transcribe audio PCM ya grabado (Whisper local -> nube -> Google) y filtra
+    ruido/alucinaciones. Devuelve {"texto","audio","sr","t_voz"} o {"error":...}.
+    Se separó de escuchar() para poder usarla desde la CAPTURA CONTINUA (grabar
+    y transcribir en hilos distintos, sin perder voz mientras se transcribe)."""
     # Golpe/clic/ruido: hubo disparo pero casi nada de voz sostenida -> ignorar
     if voz_dur < 0.30:
         return {"error": "Solo detecté un ruido, no voz."}

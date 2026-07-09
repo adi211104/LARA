@@ -6,6 +6,15 @@ Formato: cada versión lista los cambios relevantes. Las novedades históricas
 ## [No publicado] — Endurecimiento y control
 
 ### Añadido
+- **Escucha por voz continua (productor/consumidor)**: el micrófono ya no se
+  cierra mientras LARA transcribe o piensa la frase anterior. Un hilo graba sin
+  parar y encola las frases; otro las transcribe. Se acabó el "tengo que repetir
+  varias veces" y el perder lo que dices justo después de que responde.
+- **Barge-in real**: si hablas MIENTRAS LARA habla, corta su voz al instante y
+  te atiende, sin necesidad de decir "Lara" (su propio eco se sigue filtrando;
+  funciona mejor con auriculares).
+- **Frases viejas descartadas**: si el proceso se atrasa, una frase de hace >8 s
+  no se responde tarde (arregla las respuestas "de la nada" en modo reunión).
 - **Planner multipaso**: con el modo agente activo, LARA descompone una petición
   compleja en pasos, te MUESTRA el plan y los ejecuta en orden encadenando
   resultados (respetando el modo: en 'plan' solo muestra, en 'manual' confirma

@@ -571,8 +571,22 @@ class LaraGUI:
             self._parar_escucha.set()
             self._status_safe("lista", SUAVE)
 
+    def _vaciar_colas_voz(self):
+        """Tira las frases de voz pendientes (capturadas y en cola de proceso)
+        para que un cambio de modo no arrastre lo dicho antes."""
+        for c in (getattr(self, "_cola_voz", None), self._cola):
+            if c is None:
+                continue
+            try:
+                while True:
+                    c.get_nowait()
+                    c.task_done()
+            except queue.Empty:
+                pass
+
     def _toggle_reunion(self):
         from core import modo_reunion
+        self._vaciar_colas_voz()   # no responder lo dicho antes de cambiar de modo
         if modo_reunion.activo():
             r = modo_reunion.detener()
             self.btn_reunion.config(text="🎙️ Reunión: OFF")
@@ -587,18 +601,57 @@ class LaraGUI:
 
     def _iniciar_escucha(self):
         self._parar_escucha.clear()
+        # Cola de frases YA GRABADAS pendientes de transcribir. El PRODUCTOR
+        # (_bucle_captura) graba sin parar y las encola; el CONSUMIDOR
+        # (_bucle_escucha) transcribe y procesa. Así el micrófono nunca deja de
+        # grabar mientras LARA transcribe o piensa la frase anterior -> no se
+        # pierde lo que digas justo después de hablar o mientras responde.
+        self._cola_voz = queue.Queue(maxsize=8)
+        threading.Thread(target=self._bucle_captura, daemon=True).start()
         threading.Thread(target=self._bucle_escucha, daemon=True).start()
 
-    def _bucle_escucha(self):
-        from core.skills_control import escribir_texto, _enfocar
+    def _bucle_captura(self):
+        """Productor: graba frases con VAD SIN PARAR y las encola crudas."""
+        from core.skills_audio import grabar_vad
         while not self._parar_escucha.is_set():
             dictando = self.cerebro.modo_dictado
-            t0 = time.time()
-            res = skills_voz.escuchar(espera_inicio=20.0,
-                                      fin_silencio=1.8 if dictando else None,
-                                      max_frase=20.0 if dictando else None)
+            fin_sil = 1.8 if dictando else skills_voz.VAD_FIN_SILENCIO
+            maxf = 20.0 if dictando else skills_voz.VAD_MAX_FRASE
+            try:
+                # espera_inicio moderado: si no hablas, grabar_vad lanza a los
+                # ~12 s y el bucle RE-COMPRUEBA si hay que parar (botón 👂 off) y
+                # vuelve a escuchar. Al terminar cada frase suelta el mic, así el
+                # botón 🎤 puede intercalarse.
+                crudo, sr, voz_dur, t_voz = grabar_vad(
+                    espera_inicio=12.0, fin_silencio=fin_sil, max_frase=maxf)
+            except Exception:
+                continue
             if self._parar_escucha.is_set():
                 break
+            try:
+                self._cola_voz.put_nowait(
+                    {"crudo": crudo, "sr": sr, "voz_dur": voz_dur, "t_voz": t_voz})
+            except queue.Full:
+                pass  # transcripción muy atrasada: descartamos la más vieja implícitamente
+
+    def _bucle_escucha(self):
+        """Consumidor: transcribe y procesa cada frase capturada por el productor."""
+        from core.skills_control import escribir_texto, _enfocar
+        while not self._parar_escucha.is_set():
+            try:
+                cap = self._cola_voz.get(timeout=0.4)
+            except queue.Empty:
+                continue
+            if self._parar_escucha.is_set():
+                break
+            t0 = cap.get("t_voz") or time.time()
+            # Descarta frases VIEJAS: si la transcripción/proceso se atrasó (nube
+            # lenta, cola llena), una frase de hace rato NO debe responderse tarde
+            # ni salir "de la nada" (era el efecto raro en modo reunión).
+            if time.time() - t0 > 8.0:
+                continue
+            res = skills_voz.transcribir_crudo(
+                cap["crudo"], cap["sr"], cap["voz_dur"], cap["t_voz"])
             if "texto" not in res or not res["texto"]:
                 continue
             texto = res["texto"]
@@ -700,20 +753,22 @@ class LaraGUI:
                 skills_voz.set_voz_activa(True)
                 self.root.after(0, lambda: self.btn_voz.config(text="🔊 Voz: ON"))
 
-            # Voz solapada con la de LARA: solo interrumpe si dices "LARA"
-            # (el eco puro ya se descartó arriba; esto cubre lo demás)
+            # BARGE-IN: hablaste MIENTRAS LARA hablaba y NO era su propio eco (el
+            # eco puro ya se descartó arriba). Corta su voz al instante y atiende
+            # lo que dijiste, SIN exigir que digas "Lara". Frases muy cortas
+            # (1-2 caracteres, ruido suelto) no interrumpen.
             if solapa:
-                from core import wake_word as _ww
-                if _ww.menciona_lara(texto):
-                    skills_voz.detener_voz()
-                    if self._panel is not None:
-                        try:
-                            self._panel._cancelar_pendientes()
-                        except Exception:
-                            pass
-                    comando = self._quitar_wake(texto)
-                    if comando:
-                        self._responder_voz(comando, hablante)
+                if len(texto.strip()) < 3:
+                    continue
+                skills_voz.detener_voz()
+                if self._panel is not None:
+                    try:
+                        self._panel._cancelar_pendientes()
+                    except Exception:
+                        pass
+                comando = self._quitar_wake(texto)
+                if comando:
+                    self._responder_voz(comando, hablante)
                 continue
 
             # En reposo: procesa (quitando un "LARA" inicial si lo hay)
