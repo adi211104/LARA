@@ -1372,7 +1372,15 @@ class LaraCerebro:
             self.contexto_ejecucion = f"Descarga de video: {json.dumps(resultado, ensure_ascii=False)}"
             return
 
-        # Acciones del sistema operativo
+        # Acciones del sistema operativo (bloque final: cmd / código / archivos /
+        # abrir / listar / leer / crear). Extraído a su propio método para acotar
+        # el tamaño del despachador y dejar un punto único donde tocar el SO.
+        self._ejecutar_accion_os(accion, params, mensaje)
+
+    def _ejecutar_accion_os(self, accion: str, params: list, mensaje: str) -> None:
+        """Ejecuta las acciones que tocan el sistema operativo y presenta el
+        resultado. Se invoca al final de _procesar_respuesta_llm cuando la acción
+        no fue ninguna de las especializadas de arriba."""
         self._status(f"Ejecutando: {accion}")
         resultado = {}
         try:
