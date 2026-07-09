@@ -807,6 +807,59 @@ class LaraCerebro:
                 self._say(f"No pude completar el diagnóstico: {e}")
             return "\n".join(self._buffer)
 
+        # RAG: (re)indexar tus documentos para poder responder desde ellos.
+        if _p in ("indexa mis documentos", "indexar documentos", "reindexa documentos",
+                  "reindexar documentos", "actualiza mis documentos", "aprende mis documentos",
+                  "lee mis documentos", "actualiza el indice", "actualiza el índice"):
+            self._buffer = []
+            self._status("Indexando tus documentos...")
+            try:
+                from core import rag_documentos
+                r = rag_documentos.indexar_todo()
+                est = rag_documentos.estado()
+                self._say(f"Documentos al día: {r.get('archivos_actualizados', 0)} archivos "
+                          f"nuevos o modificados ({r.get('fragmentos_nuevos', 0)} fragmentos). "
+                          f"Ya puedo consultar {est['fragmentos']} fragmentos de {est['archivos']} archivos.")
+            except Exception as e:
+                log_error("rag_indexar_cmd", str(e))
+                self._say("No pude indexar los documentos ahora mismo.")
+            return "\n".join(self._buffer)
+
+        # RAG: "indexa/aprende/lee la carpeta <ruta o nombre conocido>".
+        m_carp = re.match(r"(?:indexa|indexar|aprende|lee)\s+(?:la\s+)?carpeta\s+(.+)", _p)
+        if m_carp:
+            self._buffer = []
+            try:
+                from core import rag_documentos
+                ruta = rag_documentos.resolver_carpeta(m_carp.group(1).strip())
+                self._status(f"Indexando {ruta}...")
+                r = rag_documentos.indexar_carpeta(ruta)
+                if "error" in r:
+                    self._say(r["error"])
+                else:
+                    self._say(f"Indexé {r['archivos_actualizados']} archivos de «{ruta.name}» "
+                              f"({r['fragmentos_nuevos']} fragmentos nuevos).")
+            except Exception as e:
+                log_error("rag_carpeta_cmd", str(e))
+                self._say("No pude indexar esa carpeta.")
+            return "\n".join(self._buffer)
+
+        # RAG: estado del índice de documentos.
+        if _p in ("que documentos conoces", "qué documentos conoces", "estado de documentos",
+                  "cuantos documentos tienes", "cuántos documentos tienes", "estado del indice",
+                  "estado del índice"):
+            self._buffer = []
+            try:
+                from core import rag_documentos
+                est = rag_documentos.estado()
+                self._say(f"Tengo indexados {est['archivos']} documentos "
+                          f"({est['fragmentos']} fragmentos consultables). "
+                          f"Di 'indexa mis documentos' para actualizar.")
+            except Exception as e:
+                log_error("rag_estado_cmd", str(e))
+                self._say("No pude consultar el estado de los documentos.")
+            return "\n".join(self._buffer)
+
         # Aprendizaje de voz SIN el botón de entrenar: "aprende mi voz [como X]".
         # Inicia una sesión de enrolamiento pasivo; el bucle de escucha de la GUI
         # va tomando las siguientes frases que hables hasta completar el perfil.
@@ -910,6 +963,21 @@ class LaraCerebro:
                 self.contexto_ejecucion = (self.contexto_ejecucion + "\n" + extra) if self.contexto_ejecucion else extra
         except Exception as e:
             log_error("memoria_vectorial.recordar", str(e))
+
+        # RAG de documentos: fragmentos de TUS archivos (PDF, Word, notas) que se
+        # parecen a la pregunta. Así LARA responde desde tu material, citando el
+        # archivo. Búsqueda LOCAL (mismos embeddings de la memoria); si no hay
+        # nada suficientemente relevante, no añade ruido.
+        try:
+            from core import rag_documentos
+            frags = rag_documentos.buscar(prompt, k=4)
+            if frags:
+                extra = ("Fragmentos de TUS documentos relacionados con la pregunta "
+                         "(cita el archivo entre comillas si los usas; no inventes lo que no esté):\n" +
+                         "\n".join(f"- [{f['archivo']}]: {f['texto'][:400]}" for f in frags))
+                self.contexto_ejecucion = (self.contexto_ejecucion + "\n" + extra) if self.contexto_ejecucion else extra
+        except Exception as e:
+            log_error("rag_documentos.buscar", str(e))
 
         # Novedades del agente de fondo
         try:

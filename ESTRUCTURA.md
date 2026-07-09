@@ -36,6 +36,7 @@ persistente y ejecución de acciones en el sistema operativo.
 |---|---|
 | `sesiones.py` | Historial por sesión (persistencia entre reinicios). |
 | `memoria_vectorial.py` | Memoria semántica de largo plazo (embeddings + SQLite). |
+| `rag_documentos.py` | **RAG**: indexa tus PDF/Word/notas y responde citando el archivo (embeddings locales + SQLite). |
 | `skills_memoria.py` | Utilidades de memoria de turnos. |
 | `skills_conocimiento.py` | Base de conocimiento guardado. |
 | `uso_tokens.py` | Contabilidad de tokens y ahorro (local vs nube). |
@@ -86,7 +87,8 @@ persistente y ejecución de acciones en el sistema operativo.
 
 Todo esto vive en `Taller_IA/` (OneDrive) y **no se versiona**:
 
-- `conocimiento/` — memoria, base de conocimiento, nivel de esfuerzo, modos, rutinas.
+- `conocimiento/` — memoria, base de conocimiento, nivel de esfuerzo, modos, rutinas, índice RAG.
+- `documentos_rag/` — deja aquí los PDF/Word/notas que quieras que LARA "sepa" (se indexan solos).
 - `logs/` — `errores.log` y `auditoria.log` (acciones ejecutadas).
 - `workspace/` — archivos de trabajo generados por LARA.
 - `skills_pendientes/` — propuestas de skills antes de instalarlas.

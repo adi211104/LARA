@@ -363,6 +363,12 @@ class LaraGUI:
             auto_registrar_skills_core()
         except Exception:
             pass
+        # Indexar tus documentos (RAG) en segundo plano, sin bloquear la ventana.
+        try:
+            from core import rag_documentos
+            rag_documentos.indexar_todo_async()
+        except Exception:
+            pass
 
     def _saludo(self):
         # Briefing proactivo tipo JARVIS: saluda por tu nombre y te pone al día

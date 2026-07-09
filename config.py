@@ -21,6 +21,9 @@ else:
 WORKSPACE = BASE_DIR / "workspace"
 KNOWLEDGE_DIR = BASE_DIR / "conocimiento"
 SKILLS_PENDIENTES = BASE_DIR / "skills_pendientes"
+# Carpeta que LARA indexa para el RAG (responder desde TUS documentos: PDF, Word,
+# notas). Deja aquí lo que quieras que "sepa". También indexa WORKSPACE.
+DOCUMENTOS_RAG = BASE_DIR / "documentos_rag"
 ESCRITORIO = Path.home() / "Desktop"
 DESCARGAS = Path.home() / "Downloads"
 DOCUMENTOS = Path.home() / "Documents"
@@ -46,7 +49,7 @@ CARPETAS_CONOCIDAS = {
 }
 
 # Aseguramos que las carpetas base existan
-for carpeta in [WORKSPACE, KNOWLEDGE_DIR, SKILLS_PENDIENTES]:
+for carpeta in [WORKSPACE, KNOWLEDGE_DIR, SKILLS_PENDIENTES, DOCUMENTOS_RAG]:
     carpeta.mkdir(parents=True, exist_ok=True)
 
 # Identidad

@@ -54,6 +54,14 @@ def main():
     except Exception:
         pass
 
+    # Indexar tus documentos (RAG) en segundo plano: al terminar, LARA puede
+    # responder desde tus PDF/Word/notas de la carpeta Taller_IA/documentos_rag.
+    try:
+        from core import rag_documentos
+        rag_documentos.indexar_todo_async()
+    except Exception:
+        pass
+
     # Estado del wake word (manos libres) para poder encenderlo/apagarlo.
     wake_parar = {"ev": None}
 

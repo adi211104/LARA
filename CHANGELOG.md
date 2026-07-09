@@ -6,6 +6,12 @@ Formato: cada versión lista los cambios relevantes. Las novedades históricas
 ## [No publicado] — Endurecimiento y control
 
 ### Añadido
+- **RAG sobre tus documentos** (`core/rag_documentos.py`): LARA indexa el
+  contenido de tus PDF, Word, TXT y Markdown (carpeta `Taller_IA/documentos_rag`
+  y `workspace`) y responde CITANDO el archivo de origen. Usa los embeddings
+  LOCALES de Ollama (rápido, gratis, offline), guarda en SQLite e indexa de
+  forma INCREMENTAL (solo lo nuevo/modificado). Comandos: "indexa mis documentos",
+  "indexa la carpeta X", "estado de documentos". Se indexa solo al arrancar.
 - **Control de versiones (git)**: repositorio inicializado, `.gitignore`
   (secretos y datos de runtime fuera del repo), `ESTRUCTURA.md` y este changelog.
 - **Modos de operación configurables** (`core/modos.py`), estilo Claude Code:
