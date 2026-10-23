@@ -1,6 +1,6 @@
 # Auditoría de viabilidad — LARA
 
-Fecha de revisión: 10 de octubre de 2026  
+Fecha de revisión: 10 de octubre de 2026
 Alcance: revisión estática del repositorio, compilación de Python y ejecución de `python probar_cerebro.py`. No se usaron cuentas, micrófono, cámara ni servicios de nube durante la revisión.
 
 ## Dictamen
@@ -192,4 +192,3 @@ Antes de implementar Fase 2 hay que decidir:
 | 2026-10-10 | Se aplica la contención inicial de Fase 1 y seis pruebas de regresión. | Impedir la ejecución silenciosa por rutas rápidas y pausar superficies de ejecución dinámica. |
 | 2026-10-10 | Se rediseña la GUI y se documenta en `CHANGELOG.md`. | Mejorar legibilidad, jerarquía visual y percepción de estado sin alterar el núcleo del asistente. |
 | 2026-10-10 | Segunda pasada de Fase 1: cuatro bypass de autorización cerrados, inyección de comandos vía URL corregida, Open Code contenido, instalación fijada, directorio de datos configurable, logging estructurado y 32 pruebas. | Cumplir el criterio de aceptación de la Fase 1 y los pendientes de A-04 sin esperar decisiones de producto. |
-
