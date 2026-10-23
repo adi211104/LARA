@@ -1,0 +1,32 @@
+[
+  {
+    "caso": "logica",
+    "pregunta": "Tengo 3 cajas: una dice manzanas, otra naranjas, otra mezcla. Todas las etiquetas son incorrectas. ¿De qué caja saco una fruta para identificar las tres y por qué? Responde sin herramientas.",
+    "respuesta": "Debes coger una fruta de la caja que lleva la etiqueta \"mezcla\". Como todas las etiquetas son incorrectas, esa caja no contiene una mezcla; solo puede contener exclusivamente manzanas o exclusivamente naranjas. Si al sacarla encuentras una manzana, sabes que esa caja es la de manzanas; entonces la caja etiquetada como \"manzanas\" no puede contener manzanas (su etiqueta es falsa) y tampoco puede contener mezcla (porque la caja de mezcla ya está identificada), por lo que debe contener solo naranjas. La última caja, la que lleva la etiqueta \"naranjas\", al quedar sin opción, será la de mezcla. Lo mismo ocurre si la fruta extraída es una naranja. Así, con una sola fruta de la caja etiquetada \"mezcla\" identificas las tres cajas.",
+    "segundos": 5.53,
+    "arranque_s": 3.752,
+    "motor": "☁ openai/gpt-oss-120b",
+    "estados": [
+      [
+        7.028,
+        "LARA pensando..."
+      ]
+    ],
+    "evidencia": null
+  },
+  {
+    "caso": "codigo",
+    "pregunta": "Escribe una función Python que calcule la mediana de una lista sin modificarla, acepte números negativos y lance ValueError si está vacía. Incluye tres pruebas. Solo muestra código, no lo ejecutes.",
+    "respuesta": "def median(lst):\n    if not lst:\n        raise ValueError(\"La lista está vacía\")\n    sorted_lst = sorted(lst)\n    n = len(sorted_lst)\n    mid = n // 2\n    if n % 2 == 0:\n        return (sorted_lst[mid - 1] + sorted_lst[mid]) / 2\n    return sorted_lst[mid]\n\n# Pruebas\nassert median([3, 1, 2]) == 2\nassert median([-5, -1, -3, -2]) == -2.5\nassert median([10]) == 10",
+    "segundos": 4.98,
+    "arranque_s": 4.347,
+    "motor": "☁ openai/gpt-oss-120b",
+    "estados": [
+      [
+        7.412,
+        "LARA pensando..."
+      ]
+    ],
+    "evidencia": null
+  }
+]

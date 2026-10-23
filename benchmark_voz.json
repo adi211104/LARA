@@ -1,0 +1,23 @@
+[
+  {
+    "caso": "sintesis",
+    "referencia": "Lara abre el bloc de notas",
+    "error": "No se pudo generar muestra Edge"
+  },
+  {
+    "caso": "sintesis",
+    "referencia": "Recuérdame revisar el amplificador en quince minutos",
+    "error": "No se pudo generar muestra Edge"
+  },
+  {
+    "caso": "sintesis",
+    "referencia": "Busca en internet cómo funciona un transistor",
+    "error": "No se pudo generar muestra Edge"
+  },
+  {
+    "caso": "silencio",
+    "texto": null,
+    "error": "Eso no suena a voz (¿micrófono desconectado o ruido?).",
+    "segundos": 0.015
+  }
+]

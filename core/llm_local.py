@@ -32,7 +32,24 @@ Variables de entorno (todas opcionales):
   LARA_OLLAMA_EMBED=embeddinggemma   (embeddings de la memoria semántica)
   LARA_OLLAMA_URL=http://127.0.0.1:11434
   LARA_OLLAMA_TIMEOUT=25      (segundos por llamada; si excede -> nube)
-  LARA_OLLAMA_KEEP_ALIVE=30m  (cuánto queda el modelo cargado en RAM)
+  LARA_OLLAMA_KEEP_ALIVE=3m   (cuánto queda el modelo cargado en RAM; ver NOTA)
+  LARA_OLLAMA_NUM_CTX=2048    (tamaño de contexto; ver nota de RAM abajo)
+
+NOTA DE RAM: sin num_ctx, Ollama usa el contexto por defecto del Modelfile del
+modelo (para qwen2.5-coder eso es grande). En una PC con poca RAM libre, el
+runner de llama.cpp puede fallar al reservar el buffer de KV-cache (error 500
+"failed to allocate buffer for kv cache") y la llamada real fallará SIEMPRE
+aunque disponible() diga True. Por eso se fija un num_ctx moderado por
+defecto: los prompts de router de LARA son cortos y no lo necesitan grande.
+
+NOTA DE KEEP_ALIVE: mientras el modelo queda cargado, el PROCESO ollama.exe
+retiene ~600 MB de RAM del sistema (medido en esta PC), aparte de lo que use
+la GPU. En equipos con poca RAM libre eso compite con Whisper local
+(stt_local.py) y puede degradar la captura de voz. Por eso el default bajó de
+30m a 3m: sigue habiendo caché de prompt dentro de una conversación seguida,
+pero se libera la RAM más rápido en los silencios. Si tu PC tiene RAM de
+sobra y priorizas latencia sobre la voz, puedes subirlo con la variable de
+entorno.
 """
 
 import os
@@ -46,7 +63,20 @@ _URL = os.environ.get("LARA_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 _MODELO = os.environ.get("LARA_OLLAMA_MODEL", "qwen2.5:3b-instruct")
 _ACTIVO = os.environ.get("LARA_LLM_LOCAL", "1").strip().lower() not in ("0", "false", "no", "")
 _TIMEOUT = float(os.environ.get("LARA_OLLAMA_TIMEOUT", "25"))
-_KEEP_ALIVE = os.environ.get("LARA_OLLAMA_KEEP_ALIVE", "30m")
+_NUM_CTX = int(os.environ.get("LARA_OLLAMA_NUM_CTX", "2048"))
+_THREADS = int(os.environ.get("LARA_OLLAMA_THREADS", "3"))
+_KEEP_ALIVE = os.environ.get("LARA_OLLAMA_KEEP_ALIVE", "3m")
+
+
+def _opciones_thinking():
+    """Qwen3 rápido: evitar consumir el presupuesto en pensamiento invisible.
+
+    No enviar la opción a modelos antiguos que podrían rechazarla.
+    El usuario puede activarla explícitamente, pero el local solo atiende lo simple.
+    """
+    if _MODELO.lower().startswith('qwen3'):
+        return {'think': os.environ.get('LARA_OLLAMA_THINK', '0').lower() in ('1', 'true', 'yes')}
+    return {}
 # Modelo de EMBEDDINGS local (memoria semántica sin gastar nube). Multilingüe:
 # la memoria de LARA está en español. Instalar: ollama pull embeddinggemma
 _MODELO_EMBED = os.environ.get("LARA_OLLAMA_EMBED", "embeddinggemma")
@@ -123,9 +153,12 @@ def disponible() -> bool:
             _marcar(False)
             return False
         nombres = [m.get("name", "") for m in r.json().get("models", [])]
-        # Coincidencia por prefijo (qwen2.5:3b == qwen2.5:3b-instruct-q4...)
-        base = _MODELO.split(":")[0]
-        ok = any(_MODELO == n or n.startswith(base) for n in nombres)
+        # Coincidencia EXACTA del tag completo: comparar solo por prefijo
+        # (ej. "qwen2.5") producía falsos positivos con modelos distintos que
+        # comparten familia (p. ej. "qwen2.5-coder:3b" vs "qwen2.5:3b-instruct"),
+        # haciendo creer a LARA que el modelo estaba listo cuando en realidad
+        # Ollama no tenía ese tag y cada llamada real fallaba en silencio.
+        ok = _MODELO in nombres
         _marcar(ok)
         if ok and not _ya_avisado:
             _ya_avisado = True
@@ -160,13 +193,15 @@ def precalentar(messages: list = None):
             if messages:
                 _http().post(f"{_URL}/api/chat", json={
                     "model": _MODELO, "messages": messages, "stream": False,
+                    **_opciones_thinking(),
                     "keep_alive": _KEEP_ALIVE,
-                    "options": {"num_predict": 1},
+                    "options": {"num_predict": 1, "num_ctx": _NUM_CTX},
                 }, timeout=120)
             else:
                 # Sin prompt: solo carga los pesos y los mantiene (keep_alive).
                 _http().post(f"{_URL}/api/generate", json={
-                    "model": _MODELO, "keep_alive": _KEEP_ALIVE}, timeout=120)
+                    "model": _MODELO, "keep_alive": _KEEP_ALIVE,
+                    "options": {"num_ctx": _NUM_CTX}}, timeout=120)
         except Exception:
             pass
 
@@ -187,8 +222,10 @@ def chat(messages: list, json_mode: bool = False, max_tokens: int = 700,
             "model": _MODELO,
             "messages": messages,
             "stream": False,
+            **_opciones_thinking(),
             "keep_alive": _KEEP_ALIVE,
-            "options": {"temperature": temperature, "num_predict": max_tokens},
+            "options": {"temperature": temperature, "num_predict": max_tokens,
+                        "num_ctx": _NUM_CTX, "num_thread": _THREADS},
         }
         if json_mode:
             payload["format"] = "json"   # Ollama fuerza JSON válido a nivel de sampler
@@ -196,6 +233,7 @@ def chat(messages: list, json_mode: bool = False, max_tokens: int = 700,
                           timeout=timeout or _TIMEOUT)
         if r.status_code != 200:
             _stats["fallos"] += 1
+            _marcar(False)
             return None
         texto = (r.json().get("message", {}).get("content") or "").strip()
         if texto:
@@ -227,14 +265,17 @@ def chat_stream(messages: list, max_tokens: int = 500, temperature: float = 0.3)
             "model": _MODELO,
             "messages": messages,
             "stream": True,
+            **_opciones_thinking(),
             "keep_alive": _KEEP_ALIVE,
-            "options": {"temperature": temperature, "num_predict": max_tokens},
+            "options": {"temperature": temperature, "num_predict": max_tokens,
+                        "num_ctx": _NUM_CTX, "num_thread": _THREADS},
         }
         hubo_texto = False
         with _http().post(f"{_URL}/api/chat", json=payload, stream=True,
                            timeout=_TIMEOUT) as r:
             if r.status_code != 200:
                 _stats["fallos"] += 1
+                _marcar(False)
                 return
             for linea in r.iter_lines():
                 if not linea:
@@ -284,8 +325,7 @@ def embed_disponible() -> bool:
     try:
         r = _http().get(f"{_URL}/api/tags", timeout=2.0)
         nombres = [m.get("name", "") for m in r.json().get("models", [])] if r.status_code == 200 else []
-        base = _MODELO_EMBED.split(":")[0]
-        _embed_ok = any(_MODELO_EMBED == n or n.startswith(base) for n in nombres)
+        _embed_ok = _MODELO_EMBED in nombres
     except Exception:
         _embed_ok = False
     _embed_ts = time.time()

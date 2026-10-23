@@ -26,7 +26,7 @@ load_dotenv()
 VISION_MODEL = "gemini-2.5-flash"
 from google.genai import types as _types
 _client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"),
-                       http_options=_types.HttpOptions(timeout=90000))  # 90s: imágenes/video
+                       http_options=_types.HttpOptions(timeout=90000)) if os.getenv("GEMINI_API_KEY") else None
 
 _PERSONA = ("Eres LARA, asistente personal tipo JARVIS para el taller de electrónica de Adi. "
             "Respondes en español, claro y directo, con un toque de humor seco ocasional. "
@@ -42,6 +42,8 @@ _SUBIR = {".pdf", ".mp4", ".mov", ".avi", ".mkv", ".webm", ".mp3", ".wav", ".m4a
 
 def _generar(contenido, max_tokens: int = 1200) -> str:
     """Llamada multimodal a Gemini con reintentos ante errores transitorios."""
+    if _client is None:
+        raise RuntimeError("La visión necesita GEMINI_API_KEY. Configura ese proveedor para analizar imágenes.")
     import time
     from google.genai import types
     try:

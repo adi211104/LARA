@@ -28,7 +28,7 @@ from core.skills_novedades import (
 from core.skills_propuestas import proponer_skill
 
 load_dotenv()
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+client = Groq(api_key=os.getenv("GROQ_API_KEY"), timeout=20, max_retries=0) if os.getenv("GROQ_API_KEY") else None
 
 MODELO_AGENTE = "groq/compound"  # gestor agéntico de Groq (antes 'compound-beta', ya retirado)
 INTERVALO_MINUTOS = 30
@@ -86,17 +86,14 @@ def revisar_tareas_urgentes() -> None:
 
 def recordatorio_rapido(texto: str, minutos: float) -> dict:
     """
-    Recordatorio puntual y efímero (ej: 'tómame agua en 30 min').
-    NO se guarda en la base de tareas del taller: solo programa un timer
-    en memoria que dispara una notificación de escritorio al cumplirse.
-    Si reinicias el programa antes de que se cumpla, el recordatorio se pierde.
+    Recordatorio persistente en SQLite, independiente de las tareas del taller.
+    Si LARA está cerrada al vencer, lo entrega al siguiente inicio.
     """
     try:
-        minutos = float(minutos)
-        t = threading.Timer(minutos * 60, _notificar, args=("LARA — Recordatorio", texto))
-        t.daemon = True
-        t.start()
-        return {"estado": "ok", "texto": texto, "minutos": minutos}
+        from core.recordatorios import crear, iniciar
+        resultado = crear(texto, minutos)
+        iniciar(_entregar_recordatorio)
+        return resultado
     except Exception as e:
         return {"error": str(e)}
 
@@ -217,12 +214,14 @@ def ciclo_agente() -> None:
     while True:
         try:
             revisar_tareas_urgentes()
-            resolver_limitaciones()  # barata: casi siempre la lista está vacía
+            nube_fondo = client is not None and os.getenv("LARA_CLOUD_BACKGROUND", "0") == "1"
+            if nube_fondo:
+                resolver_limitaciones()
 
             contador += 1
-            if contador % 2 == 0:
+            if nube_fondo and contador % 2 == 0:
                 investigar_novedades()
-            if contador % 4 == 0:
+            if nube_fondo and contador % 4 == 0:
                 investigacion_autonoma()
         except Exception as e:
             print(f"[AGENTE FONDO] Error: {e}")
@@ -230,6 +229,13 @@ def ciclo_agente() -> None:
 
 
 def iniciar_agente_fondo() -> None:
+    from core.recordatorios import iniciar
+    iniciar(_entregar_recordatorio)
     hilo = threading.Thread(target=ciclo_agente, daemon=True)
     hilo.start()
     print(f"[LARA] Agente de fondo iniciado (revisa cada {INTERVALO_MINUTOS} min).")
+
+
+def _entregar_recordatorio(texto):
+    _notificar("LARA — Recordatorio", texto)
+    _hablar_alerta(texto)

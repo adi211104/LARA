@@ -6,6 +6,58 @@ from config import HERRAMIENTAS, WORKSPACE, CARPETAS_CONOCIDAS
 
 _INTERACTIVOS_PELIGROSOS = {"python", "python3", "py", "cmd", "powershell", "node", "irb", "sqlite3"}
 
+# A-02: caracteres con significado especial para cmd.exe. Un nombre de programa
+# o una URL que los contenga se rechaza en vez de pasarlo a un intérprete.
+_CARACTERES_SHELL = set('"^|<>%`' + '\r\n\t\x00')
+
+
+def _bloqueo_experimental() -> dict | None:
+    """Defensa en profundidad: aunque el gate de modos ya pausa estas
+    herramientas, la propia función se niega si el interruptor de desarrollo
+    no está activo. Así ninguna ruta nueva puede llamarlas por descuido."""
+    from core.modos import experimentales_habilitadas
+    if experimentales_habilitadas():
+        return None
+    return {"error": ("La ejecución de comandos y código está pausada durante la Fase 1 "
+                      "de estabilización (LARA_ENABLE_EXPERIMENTAL_TOOLS=0).")}
+
+
+def _url_segura(url: str) -> str | None:
+    """Devuelve la URL normalizada si es http(s) y no puede romper un comando;
+    si no, None."""
+    import re
+    from urllib.parse import urlparse
+    url = (url or "").strip()
+    if not url:
+        return None
+    if not url.lower().startswith(("http://", "https://")):
+        # Otro esquema explícito (javascript:, file:, ms-settings:...) no se
+        # abre; "localhost:8080" sí, porque tras ':' viene un puerto.
+        if re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:(?!\d)", url):
+            return None
+        url = "https://" + url
+    # '%' es legítimo en URLs (codificación) y ya no se pasa por cmd.exe.
+    if any((c in _CARACTERES_SHELL and c != "%") or c.isspace() for c in url):
+        return None
+    partes = urlparse(url)
+    if partes.scheme not in ("http", "https") or not partes.netloc:
+        return None
+    return url
+
+
+def _ruta_chrome() -> str | None:
+    """Localiza chrome.exe sin pasar por el shell."""
+    encontrado = shutil.which("chrome")
+    if encontrado:
+        return encontrado
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"),
+                 os.environ.get("LOCALAPPDATA")):
+        if base:
+            candidato = Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe"
+            if candidato.exists():
+                return str(candidato)
+    return None
+
 
 def _resolver_ruta(ruta: str) -> Path:
     """
@@ -74,6 +126,9 @@ def ejecutar_cmd(comando: str) -> dict:
     que un comando interactivo cuelgue el proceso. Además, BLOQUEA a nivel de
     código (no solo de prompt) cualquier intento de abrir un intérprete sin
     argumentos, sin importar qué decida el modelo."""
+    bloqueo = _bloqueo_experimental()
+    if bloqueo:
+        return bloqueo
     comando_normalizado = comando.strip().split()[0].lower() if comando.strip() else ""
     if comando_normalizado in _INTERACTIVOS_PELIGROSOS and len(comando.strip().split()) == 1:
         return {
@@ -109,6 +164,9 @@ def ejecutar_codigo_visible(codigo: str, nombre_archivo: str = "temp_exec.py") -
     Usa subprocess.Popen (no .run) -> no bloquea el hilo principal de LARA,
     la ventana queda abierta con 'pause' para que puedas ver el resultado.
     """
+    bloqueo = _bloqueo_experimental()
+    if bloqueo:
+        return bloqueo
     target = WORKSPACE / nombre_archivo
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -133,13 +191,12 @@ def ajustar_brillo(nivel) -> dict:
     except Exception:
         return {"error": f"Nivel de brillo inválido: {nivel}"}
 
-    comando = (
-        'powershell -Command "(Get-WmiObject -Namespace root/WMI '
-        f'-Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,{nivel})"'
-    )
+    script = ("(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods)"
+              f".WmiSetBrightness(1,{nivel})")
     try:
         r = subprocess.run(
-            comando, shell=True, capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL
         )
         if r.returncode != 0 or r.stderr.strip():
             return {"error": f"No se pudo ajustar el brillo (tu pantalla puede no soportar WMI, común en monitores externos): {r.stderr.strip()[:200]}"}
@@ -150,20 +207,63 @@ def ajustar_brillo(nivel) -> dict:
         return {"error": str(e)}
 
 
-def ejecutar_cmd_admin(comando: str) -> dict:
+def ejecutar_cmd_admin(comando: str, esperar: bool = True, timeout: int = 90) -> dict:
     """
-    Ejecuta un comando con permisos de administrador (dispara el prompt de UAC
-    de Windows). LIMITACIÓN: al elevarse en un proceso nuevo, no se puede
-    capturar su stdout/stderr directamente -- el usuario debe ver el resultado
-    en la ventana que se abre. Úsalo solo cuando el comando realmente requiera
-    privilegios elevados (instalar software, modificar el sistema, etc).
+    Ejecuta un comando con permisos de administrador (dispara el UAC de Windows).
+
+    A diferencia de la versión antigua (que solo abría una ventana y no podía
+    leer su salida), ahora REDIRIGE stdout/stderr del proceso elevado a un
+    archivo temporal y, si 'esperar' es True, aguarda a que termine y DEVUELVE
+    esa salida — así LARA puede razonar sobre el resultado igual que con un
+    comando normal. 'esperar=False' vuelve al modo lanzar-y-olvidar (útil para
+    instaladores interactivos). Úsalo solo cuando de verdad haga falta elevación
+    (instalar software del sistema, servicios, drivers, cambios en HKLM...).
     """
+    bloqueo = _bloqueo_experimental()
+    if bloqueo:
+        return bloqueo
+    import tempfile
+    import time as _t
+
+    if not comando or not comando.strip():
+        return {"error": "Comando vacío."}
+    salida = Path(tempfile.gettempdir()) / f"lara_admin_{int(_t.time()*1000)}.out"
+    marca = salida.with_suffix(".done")
     try:
-        cmd_ps = f'Start-Process cmd -ArgumentList "/c {comando} & pause" -Verb RunAs'
-        subprocess.Popen(["powershell", "-Command", cmd_ps], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return {"estado": "ok", "nota": "Se abrió una ventana elevada (UAC). Revisa el resultado ahí; esta función no puede leer su salida."}
+        # cmd elevado: ejecuta, vuelca TODO (1>...2>&1) a un archivo y crea una
+        # marca al terminar. -WindowStyle Hidden: sin ventana molesta.
+        interno = f'{comando} 1> "{salida}" 2>&1 & echo done> "{marca}"'
+        cmd_ps = (f'Start-Process cmd -WindowStyle Hidden '
+                  f'-ArgumentList \'/c {interno}\' -Verb RunAs')
+        subprocess.Popen(["powershell", "-NoProfile", "-Command", cmd_ps],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not esperar:
+            return {"estado": "ok", "nota": "Lanzado con permisos de administrador (sin esperar salida)."}
+        # Esperar la marca de fin (o timeout). El UAC lo aprueba el usuario:
+        # damos margen para ese clic además del tiempo de ejecución.
+        t0 = _t.time()
+        while not marca.exists():
+            if _t.time() - t0 > timeout:
+                return {"error": f"El comando elevado no terminó en {timeout}s "
+                                 f"(¿rechazaste el UAC o sigue corriendo?)."}
+            _t.sleep(0.3)
+        texto = ""
+        try:
+            texto = salida.read_text(encoding="utf-8", errors="ignore").strip()
+        except Exception:
+            pass
+        if len(texto) > 1500:
+            texto = texto[:1500] + "\n... [SALIDA TRUNCADA]"
+        return {"estado": "ok", "elevado": True, "stdout": texto or "(sin salida)"}
     except Exception as e:
         return {"error": str(e)}
+    finally:
+        for f in (salida, marca):
+            try:
+                if f.exists():
+                    f.unlink()
+            except Exception:
+                pass
 
 
 def ejecutar_codigo_python(codigo: str, nombre_archivo: str = "temp_exec.py") -> dict:
@@ -173,6 +273,9 @@ def ejecutar_codigo_python(codigo: str, nombre_archivo: str = "temp_exec.py") ->
     Resuelve en UN solo paso lo que antes requería 'crear' + 'cmd' por separado,
     evitando el bloqueo del shell.
     """
+    bloqueo = _bloqueo_experimental()
+    if bloqueo:
+        return bloqueo
     target = WORKSPACE / nombre_archivo
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -201,7 +304,9 @@ def abrir_programa(nombre: str) -> dict:
         if cmd:
             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
-            subprocess.Popen(f'start "" "{nombre}"', shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if not nombre.strip() or any(c in _CARACTERES_SHELL for c in nombre):
+                return {"error": f"Nombre de programa no válido: {nombre!r}"}
+            os.startfile(nombre.strip())  # sin shell: no interpreta '&', '|', etc.
         return {"estado": "ok", "programa": nombre}
     except Exception as e:
         return {"error": str(e)}
@@ -211,20 +316,25 @@ def abrir_url_en_navegador(url: str, navegador: str = "edge") -> dict:
     Abre una URL directamente en el navegador indicado.
     Navegadores soportados: edge, chrome, default (navegador por defecto del sistema).
     """
+    seguro = _url_segura(url)
+    if not seguro:
+        return {"error": f"URL no válida o con caracteres no permitidos: {url!r}"}
+    url = seguro
     try:
-        url = url.strip()
-        if not url.startswith("http"):
-            url = "https://" + url
-
-        if navegador.lower() == "chrome":
-            cmd = f'start chrome "{url}"'
-        elif navegador.lower() == "default":
-            cmd = f'start "" "{url}"'
+        nav = (navegador or "edge").lower()
+        if nav == "chrome":
+            chrome = _ruta_chrome()
+            if chrome:
+                subprocess.Popen([chrome, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                os.startfile(url)
+                return {"estado": "ok", "url": url, "navegador": "default",
+                        "nota": "No encontré Chrome; la abrí en el navegador por defecto."}
+        elif nav == "default":
+            os.startfile(url)
         else:
-            # Edge es el default en Windows 10/11
-            cmd = f'start msedge "{url}"'
-
-        subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Edge es el default en Windows 10/11; su protocolo evita el shell.
+            os.startfile("microsoft-edge:" + url)
         return {"estado": "ok", "url": url, "navegador": navegador}
     except Exception as e:
         return {"error": str(e)}

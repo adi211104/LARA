@@ -54,8 +54,8 @@ if not serper_key:
 
 # Timeouts: evitan que una llamada colgada deje a LARA congelada para siempre.
 genai_client = genai.Client(api_key=gemini_api_key,
-                            http_options=types.HttpOptions(timeout=60000))  # ms
-client = Groq(api_key=groq_api_key, timeout=45.0, max_retries=2)  # router y compound
+                            http_options=types.HttpOptions(timeout=30000)) if gemini_api_key else None
+client = Groq(api_key=groq_api_key, timeout=20.0, max_retries=0) if groq_api_key else None
 
 # Cadena de routers por orden de preferencia. gpt-oss-120b y qwen3.6-27b son los
 # reemplazos oficiales que recomendó Groq al retirar llama-3.3-70b-versatile
@@ -161,6 +161,9 @@ def _cfg_esfuerzo() -> dict:
 def _cadena_routers() -> list:
     """Cadena de routers según el nivel activo: el preferido del nivel primero
     y el resto de ROUTERS detrás como fallback (nunca se pierde la cadena)."""
+    configurados = [m.strip() for m in os.getenv("LARA_CLOUD_MODELS", "").split(",") if m.strip()]
+    if configurados:
+        return list(dict.fromkeys(configurados))
     preferido = _CONFIG_NIVELES[_nivel_actual]["router"]
     return [preferido] + [r for r in ROUTERS if r != preferido]
 
@@ -191,7 +194,8 @@ de clientes, dinero, salud)."""
 # =========================================================
 
 def _llamar_gemini(system_instruction: str, contenido, max_tokens: int = 900,
-                    temperature: float = 0.2, json_mode: bool = False, max_reintentos: int = 3) -> str:
+                    temperature: float = 0.2, json_mode: bool = False, max_reintentos: int = 3,
+                    timeout_s: float | None = None) -> str:
     """
     contenido puede ser un string o una lista de turnos [{"role":..,"parts":[{"text":...}]}].
     Gemma no soporta 'system_instruction' nativo -> se simula como primer turno.
@@ -225,6 +229,7 @@ def _llamar_gemini(system_instruction: str, contenido, max_tokens: int = 900,
             max_output_tokens=tokens_actuales,
             response_mime_type="application/json" if json_mode else "text/plain",
             thinking_config=pensar,
+            http_options=types.HttpOptions(timeout=int(timeout_s * 1000)) if timeout_s else None,
         )
 
         try:
@@ -288,7 +293,7 @@ _PROMPT_ROUTER_LOCAL = f"""Eres LARA, asistente que controla el Windows de {ADMI
 Responde SIEMPRE un ÚNICO JSON: {{"requiere_razonamiento_profundo":false,"accion":"...","params":[...],"mensaje":"..."}}
 
 Acciones (elige UNA):
-hablar · cmd(comando) · abrir(programa) · listar(carpeta) · leer(archivo) · crear(archivo,contenido) · escribir(texto: teclea en la ventana activa) · escribir_en(programa,texto) · clic(que_clicar) · buscar(consulta para internet) · web(url) · url(url) · descargar(url) · descargar_video(url) · copiar_archivo(origen,destino) · mover_archivo(origen,destino) · ajustar_brillo(0-100) · sistema(op[,valor]) op=hora|bateria|info|ip|wifi|volumen_subir|volumen_bajar|silenciar|bloquear|captura|papelera|procesos|portapapeles|anota|abrir_carpeta · gestion(peticion de tareas/clientes/compras/proyectos) · recordatorio_rapido(texto,minutos) · guardar_conocimiento(titulo,contenido,categoria,tags) · analizar_pantalla([pregunta]) · ver(ruta[,pregunta]) · aprender_archivo(ruta) · explicar(tema) · ejecutar_skill(nombre[,arg])
+hablar · cmd(comando) · abrir(programa) · cerrar(programa: cierra un proceso EN EJECUCIÓN por nombre aproximado, ej. "cerrar whatsapp") · listar(carpeta) · leer(archivo) · crear(archivo,contenido) · escribir(texto: teclea en la ventana activa) · escribir_en(programa,texto) · clic(que_clicar) · buscar(consulta para internet) · web(url) · url(url) · descargar(url) · descargar_video(url) · copiar_archivo(origen,destino) · mover_archivo(origen,destino) · ajustar_brillo(0-100) · sistema(op[,valor]) op=hora|bateria|info|ip|wifi|volumen_subir|volumen_bajar|silenciar|bloquear|captura|papelera|procesos|portapapeles|anota|abrir_carpeta · gestion(peticion de tareas/clientes/compras/proyectos) · recordatorio_rapido(texto,minutos) · guardar_conocimiento(titulo,contenido,categoria,tags) · analizar_pantalla([pregunta]) · ver(ruta[,pregunta]) · aprender_archivo(ruta) · explicar(tema) · ejecutar_skill(nombre[,arg])
 
 Reglas:
 - "hablar" es SOLO para conversar o responder con palabras. Si el usuario pide HACER algo (abrir, ajustar, crear, buscar, descargar...), usa la acción que lo HACE — con hablar no pasa nada en el equipo.
@@ -298,10 +303,11 @@ Reglas:
 - Quiere ENTENDER o APRENDER un tema -> accion=explicar con el tema.
 - Carpetas por nombre: escritorio, descargas, documentos, workspace.
 - En acciones que no son hablar, "mensaje" es una frase corta en gerundio ("Abriendo Chrome") — no afirmes que ya quedó hecho.
-- NUNCA uses cmd con python/cmd/powershell a secas, ni copy/move (usa las acciones dedicadas).
+- NUNCA uses cmd con python/cmd/powershell a secas, ni copy/move, ni taskkill (usa las acciones dedicadas: abrir/cerrar). "cerrar" busca el proceso REAL en ejecución por nombre aproximado — no adivines el .exe con cmd.
 
 Ejemplos (entrada -> tu salida exacta):
 "abre chrome" -> {{"requiere_razonamiento_profundo":false,"accion":"abrir","params":["chrome"],"mensaje":"Abriendo Chrome"}}
+"cierra whatsapp" -> {{"requiere_razonamiento_profundo":false,"accion":"cerrar","params":["whatsapp"],"mensaje":"Cerrando WhatsApp"}}
 "baja el volumen" -> {{"requiere_razonamiento_profundo":false,"accion":"sistema","params":["volumen_bajar"],"mensaje":"Bajando el volumen"}}
 "pon el brillo al 50" -> {{"requiere_razonamiento_profundo":false,"accion":"ajustar_brillo","params":[50],"mensaje":"Brillo al 50%"}}
 "busca el precio del dólar" -> {{"requiere_razonamiento_profundo":false,"accion":"buscar","params":["precio del dólar hoy Perú"],"mensaje":"Buscando el precio del dólar"}}
@@ -322,13 +328,16 @@ _OPS_SISTEMA = {
 # Acciones que el despachador (cerebro.py) sabe ejecutar. Si el modelo local
 # inventa otra cosa, se descarta su respuesta y decide la nube.
 _ACCIONES_ROUTER = {
-    "hablar", "cmd", "cmd_admin", "abrir", "listar", "leer", "crear",
+    "hablar", "cmd", "cmd_admin", "abrir", "cerrar", "listar", "leer", "crear",
     "ejecutar_codigo", "ejecutar_codigo_visible", "escribir", "escribir_en",
     "clic", "buscar", "web", "url", "descargar", "descargar_video",
     "copiar_archivo", "mover_archivo", "ajustar_brillo", "sistema", "gestion",
     "recordatorio_rapido", "guardar_conocimiento", "analizar_pantalla", "ver",
     "aprender_archivo", "explicar", "ejecutar_skill", "proponer_skill",
     "aceptar_propuesta", "listar_propuestas",
+    # Capacidades de agente de trabajo (skills_archivos): editar/buscar archivos
+    "editar_archivo", "insertar_en_archivo", "leer_rango",
+    "buscar_en_archivos", "buscar_archivos",
 }
 
 # Señales de tarea FUERTE: si aparecen, la frase va directo a la nube (el 3B
@@ -356,6 +365,13 @@ _PREFIJO_CORTESIA = r"^(?:oye\s+)?(?:lara[,:]?\s+)?(?:por\s+favor\s+)?(?:me\s+)?
 _RE_ABRIR = re.compile(
     _PREFIJO_CORTESIA + r"(?:abre|ábreme|abreme|abrir|lanza|inicia)\s+"
     r"(?:el\s+|la\s+|los\s+|las\s+|mi\s+|un\s+|una\s+)?(.{2,40}?)[\s.!?]*$",
+    re.IGNORECASE)
+# Contraparte de _RE_ABRIR: cierra un proceso EN EJECUCIÓN por nombre aproximado
+# (ver cerrar_programa_inteligente en skills_programas.py) en vez de que el LLM
+# tenga que adivinar el .exe exacto con un "cmd" de taskkill.
+_RE_CERRAR = re.compile(
+    _PREFIJO_CORTESIA + r"(?:cierra|ci[eé]rrame|cerrar|termina|terminar|finaliza|finalizar|mata|matar)\s+"
+    r"(?:el\s+proceso\s+de\s+|el\s+|la\s+|los\s+|las\s+|mi\s+|un\s+|una\s+)?(.{2,40}?)[\s.!?]*$",
     re.IGNORECASE)
 # Si el resto de la frase encadena más cosas ("abre chrome y busca..."),
 # el regex NO debe decidir: eso es tarea del LLM.
@@ -448,6 +464,13 @@ def _router_rapido(user_input: str) -> str:
             return json.dumps({"requiere_razonamiento_profundo": False,
                                "accion": "abrir", "params": [objetivo],
                                "mensaje": f"Abriendo {objetivo}"}, ensure_ascii=False)
+    m = _RE_CERRAR.match(texto)
+    if m:
+        objetivo = m.group(1).strip()
+        if objetivo and not _RE_ENCADENA.search(objetivo):
+            return json.dumps({"requiere_razonamiento_profundo": False,
+                               "accion": "cerrar", "params": [objetivo],
+                               "mensaje": f"Cerrando {objetivo}"}, ensure_ascii=False)
     return None
 
 
@@ -456,8 +479,22 @@ def _router_rapido(user_input: str) -> str:
 # local respondió "hablar", su decisión se descarta y decide la nube.
 _RE_VERBO_ACCION = re.compile(
     _PREFIJO_CORTESIA + r"(abre|ábreme|abreme|abrir|lanza|inicia|ejecuta|cierra|"
+    r"cerrar|termina|terminar|finaliza|finalizar|mata|matar|"
     r"descarga|captura|silencia|bloquea|crea|crear|mueve|copia|borra|elimina|"
     r"anota|apunta|recu[eé]rdame|agrega|añade|pon|sube|baja|ajusta|escribe|teclea)\b",
+    re.IGNORECASE)
+
+# El 3B a veces confunde una pregunta genérica ("qué planes hay para hoy") con
+# una gestión real de tareas/clientes/compras/proyectos, y el gestor (compound,
+# en la nube) no da una respuesta hablada para eso — solo devuelve un mensaje
+# vacío que cae al genérico "Listo, gestionado.", ignorando la pregunta. Para
+# aceptar la decisión "gestion" del router LOCAL exigimos que la frase
+# mencione explícitamente una de estas entidades (igual que los ejemplos del
+# prompt, ej. "agrega comprar estaño a MIS TAREAS"); si no, se descarta y
+# decide la nube, que interpreta mejor la ambigüedad.
+_RE_GESTION_ENTIDAD = re.compile(
+    r"\b(tarea|tareas|pendiente|pendientes|cliente|clientes|compra|compras|"
+    r"proyecto|proyectos)\b",
     re.IGNORECASE)
 
 
@@ -472,6 +509,12 @@ _ultimo_motor = ""
 def _set_motor(nombre: str):
     global _ultimo_motor
     _ultimo_motor = nombre
+    try:
+        from core.logger import log_evento
+        log_evento("proveedor", motor=nombre,
+                   nube=not nombre.startswith(("⚡", "🏠")))
+    except Exception:
+        pass
     # Contabilizar el AHORRO del cerebro híbrido: cada turno resuelto por el
     # reflejo o el modelo local es una llamada a la nube que no se hizo.
     try:
@@ -595,6 +638,9 @@ def _consultar_router_local(user_input: str, historial: list) -> str:
                 and not datos["requiere_razonamiento_profundo"]
                 and _RE_VERBO_ACCION.match((user_input or "").strip())):
             return None
+        if (datos["accion"] == "gestion"
+                and not _RE_GESTION_ENTIDAD.search((user_input or "").strip())):
+            return None
         if cacheable and datos["accion"] != "hablar":
             if len(_cache_router_local) > 100:      # tope de tamaño
                 _cache_router_local.clear()
@@ -640,7 +686,7 @@ def generar_prompt_sistema(contexto_extra=""):
     # Prompt COMPACTO (economiza tokens: antes ocupaba ~3.5k tokens por turno).
     return f"""Eres LARA, asistente con control REAL del Windows de {ADMIN_NOMBRE} (taller de electrónica). Personalidad JARVIS: competente, leal, con humor seco ocasional que nunca resta precisión técnica.
 HOY ES {fecha_hoy}. Tu entrenamiento quedó ATRÁS en el tiempo: para CUALQUIER cosa del presente o reciente (partidos, deportes, noticias, precios, resultados, eventos, "hoy", "ayer", "este mes") usa accion=buscar SIEMPRE. NUNCA respondas de memoria sobre actualidad, NUNCA digas "no está disponible/no se ha publicado" ni mandes al usuario a buscar por su cuenta: TÚ buscas.
-SÍ controlas el equipo (cmd, archivos, programas, teclado/mouse). NUNCA digas que no puedes. Si falta una capacidad y no hay acción ni skill, usa proponer_skill.
+Dispones de acciones del equipo sujetas a permisos y disponibilidad real. Reconoce limitaciones; no inventes ejecuciones ni resultados. Si falta una capacidad, explica qué falta sin afirmar que ya la instalaste.
 Rutas: codigo={PROYECTO_DIR}; workspace={WORKSPACE}; escritorio={ESCRITORIO}. Por dentro: 3 motores (tú=router; razonamiento profundo vía requiere_razonamiento_profundo; gestor 'gestion'). Nunca digas que eres GPT/Claude.
 
 Responde SIEMPRE un ÚNICO JSON: {{"requiere_razonamiento_profundo":false,"accion":"...","params":[...],"mensaje":"..."}}
@@ -649,12 +695,17 @@ requiere_razonamiento_profundo=true SOLO si accion=hablar y es pregunta técnica
 "mensaje": si accion=hablar es TU RESPUESTA COMPLETA al usuario (frases enteras, naturales, útiles — NUNCA una sola palabra tipo "Informando"). Para las demás acciones, una frase corta en gerundio/futuro (no afirmes que ya quedó hecho: el resultado real llega después).
 
 Acciones (elige UNA):
-hablar · cmd(comando) · cmd_admin(elevado) · abrir(programa) · listar(carpeta) · leer(archivo) · crear(archivo,contenido) · ejecutar_codigo(python) · ejecutar_codigo_visible · escribir(texto: teclea en la ventana activa) · escribir_en(programa,texto: abre el programa y escribe) · clic(que_clicar) · buscar(internet) · web(url) · url(url[,navegador]) · descargar(url[,nombre]) · descargar_video(url) · copiar_archivo(o,d) · mover_archivo(o,d) · ajustar_brillo(0-100) · sistema(op,[valor]) op=hora|bateria|info|ip|wifi|volumen_subir|volumen_bajar|volumen(nivel 0-100, p.ej. "pon el audio al 50"->sistema,["volumen","50"])|silenciar|bloquear|captura|papelera|procesos|portapapeles|anota|abrir_carpeta · gestion(tarea/cliente/compra/proyecto con fecha) · recordatorio_rapido(texto,minutos) · guardar_conocimiento(titulo,contenido,categoria,tags) · analizar_pantalla([pregunta]) · ver(ruta[,pregunta]) · aprender_archivo(ruta) · explicar(tema: abre una animación HUD con voz — ver regla abajo) · ejecutar_skill(nombre[,arg]) · proponer_skill(nombre,descripcion) · aceptar_propuesta(nombre[,desc,args]) · listar_propuestas
+hablar · cmd(comando) · cmd_admin(comando elevado: instala software del sistema, servicios, drivers, cambios en HKLM; devuelve su salida) · abrir(programa) · listar(carpeta) · leer(archivo) · crear(archivo,contenido) · ejecutar_codigo(python) · ejecutar_codigo_visible · escribir(texto: teclea en la ventana activa) · escribir_en(programa,texto: abre el programa y escribe) · clic(que_clicar) · buscar(internet) · web(url) · url(url[,navegador]) · descargar(url[,nombre]) · descargar_video(url) · copiar_archivo(o,d) · mover_archivo(o,d) · ajustar_brillo(0-100) · sistema(op,[valor]) op=hora|bateria|info|ip|wifi|volumen_subir|volumen_bajar|volumen(nivel 0-100, p.ej. "pon el audio al 50"->sistema,["volumen","50"])|silenciar|bloquear|captura|papelera|procesos|portapapeles|anota|abrir_carpeta · gestion(tarea/cliente/compra/proyecto con fecha) · recordatorio_rapido(texto,minutos) · guardar_conocimiento(titulo,contenido,categoria,tags) · analizar_pantalla([pregunta]) · ver(ruta[,pregunta]) · aprender_archivo(ruta) · explicar(tema: abre una animación HUD con voz — ver regla abajo) · ejecutar_skill(nombre[,arg]) · proponer_skill(nombre,descripcion) · aceptar_propuesta(nombre[,desc,args]) · listar_propuestas · leer_rango(archivo[,desde,hasta]: lee un archivo entero o un rango de líneas, SIN truncar) · editar_archivo(archivo,buscar,reemplazar: reemplaza el fragmento EXACTO 'buscar' por 'reemplazar'; deja .bak) · insertar_en_archivo(archivo,texto[,tras_linea]) · buscar_en_archivos(patron[,carpeta,glob]: grep por contenido, devuelve archivo:línea) · buscar_archivos(patron[,carpeta]: glob por nombre, ej. "*.py")
 
 Reglas:
+- Antes de responder problemas lógicos, comprueba que tu solución satisface TODAS las condiciones, incluyendo los casos alternativos. No confundas etiquetas con contenidos reales.
+- En cálculos verifica unidades y sustituye el resultado; en código conserva sintaxis e indentación y contempla entradas vacías y límites. No digas que probaste código si no se ejecutó.
+- Si el usuario pide solo texto o código sin ejecutar, usa hablar, sin herramientas ni cambios en el equipo.
 - Capacidad ya en SKILLS INSTALADAS -> ejecutar_skill (NUNCA proponer_skill).
 - Configuración de Windows (brillo/tema/volumen/red): usa la acción dedicada o proponer_skill; NUNCA armes tú comandos WMI/registro/PowerShell.
+- Para cerrar/terminar/matar un programa o proceso: usa SIEMPRE accion=cerrar con el nombre aproximado (ej. "cerrar whatsapp"). NUNCA uses cmd con taskkill/Stop-Process adivinando el .exe — cerrar busca el proceso real en ejecución.
 - "escribir_en" para dictar texto a un programa (ej: bloc de notas). "escribir" si el programa ya está abierto y enfocado.
+- Editar un archivo EXISTENTE (código, notas, config): NO uses "crear" (borraría el resto). Primero leer_rango para ver el texto real, luego editar_archivo con el fragmento EXACTO a cambiar; para añadir usa insertar_en_archivo. Para localizar dónde está algo: buscar_en_archivos (por contenido) o buscar_archivos (por nombre).
 - NUNCA cmd con python/cmd/powershell a secas (se cuelga) ni copy/move (usa las acciones).
 - explicar: PREFIÉRELA sobre "hablar" siempre que el usuario quiera ENTENDER o
   APRENDER algo (un concepto, un evento, cómo funciona algo, la historia/origen
@@ -680,7 +731,8 @@ def consultar_lara(user_input: str, sys_prompt: str, historial: list) -> str:
     for msg in historial:
         role = "assistant" if msg["role"] in ["model", "assistant"] else "user"
         messages.append({"role": role, "content": msg["content"]})
-    messages.append({"role": "user", "content": user_input})
+    if not (messages[-1]["role"] == "user" and messages[-1]["content"] == user_input):
+        messages.append({"role": "user", "content": user_input})
 
     # 0) Router RÁPIDO determinista: "abre X", "qué hora es", "brillo al 80"...
     #    se deciden con un regex en 0 s, sin gastar ni local ni nube.
@@ -709,6 +761,15 @@ def consultar_lara(user_input: str, sys_prompt: str, historial: list) -> str:
 
     # El nivel de esfuerzo decide el ORDEN de la cadena y el presupuesto inicial.
     cfg = _cfg_esfuerzo()
+    from core import gateway_llm
+    if gateway_llm.activo():
+        try:
+            salida = gateway_llm.completar(messages, 'acciones', max_tokens=cfg['tokens_router'])
+            _set_motor('Gateway · ' + salida['modelo'])
+            return salida['texto']
+        except gateway_llm.GatewayError:
+            # La ausencia del servicio o de modelos aprobados conserva el fallback histórico.
+            pass
     cadena = _cadena_routers()
     if _router_nivel != _nivel_actual:      # el usuario cambió de nivel: reintentar desde el preferido
         _router_idx = 0
@@ -719,7 +780,7 @@ def consultar_lara(user_input: str, sys_prompt: str, historial: list) -> str:
     tokens_iniciales = cfg["tokens_router"]
     tokens_actuales = tokens_iniciales
 
-    while intentos_totales < 6:
+    while client is not None and intentos_totales < min(3, len(cadena)):
         modelo = cadena[idx % len(cadena)]
         intentos_totales += 1
         try:
@@ -778,7 +839,7 @@ def consultar_lara(user_input: str, sys_prompt: str, historial: list) -> str:
     except Exception:
         pass
     _set_motor("✖ sin motor")
-    return json.dumps({"accion": "hablar", "params": [], "mensaje": "Las IA están saturadas ahora mismo. Dame unos segundos e inténtalo de nuevo."})
+    return json.dumps({"accion": "error", "params": [], "mensaje": "No hay un motor conversacional disponible. Comprueba Ollama y las claves/cuotas de nube. Las funciones locales siguen disponibles: ayuda, mis tareas, temporizador y mis recordatorios."})
 
 
 def _router_via_gemini(user_input: str, sys_prompt: str, historial: list) -> str:
@@ -804,6 +865,17 @@ def _limpiar_formato(texto: str) -> str:
     Convierte símbolos matemáticos a equivalentes ASCII/Unicode simples.
     """
     import re
+    # JSON es un contrato de datos, no prosa. Sus literales pueden contener
+    # operadores Python, markdown o LaTeX que no deben alterarse.
+    try:
+        json.loads(texto)
+        return texto
+    except (ValueError, TypeError):
+        pass
+    # El código no es prosa: quitar * o backticks puede destruir operadores
+    # y literales. Conservar la salida técnica tal cual, incluidos sus bloques.
+    if '```' in texto or re.search(r'^\s*(?:def |class |import |from \w+ import )', texto, re.MULTILINE):
+        return texto
     # LaTeX: \mathbf{X} → X, \vec{X} → X, \frac{a}{b} → a/b
     texto = re.sub(r'\\mathbf\{([^}]+)\}', r'\1', texto)
     texto = re.sub(r'\\vec\{([^}]+)\}',    r'\1', texto)
@@ -837,10 +909,6 @@ def razonar_profundo(pregunta: str, contexto_extra: str, historial_reciente: lis
     Genera la respuesta técnica REAL que ve el usuario para preguntas complejas
     de electrónica, programación o razonamiento de varios pasos.
     """
-    historial_texto = ""
-    if historial_reciente:
-        historial_texto = "\n".join(f"{t['role']}: {t['content'][:300]}" for t in historial_reciente[-4:])
-
     contexto_str = f"\nContexto adicional disponible: {contexto_extra}" if contexto_extra else ""
 
     sistema = f"""Eres LARA, el motor de razonamiento técnico profundo de un asistente para un taller de
@@ -853,26 +921,74 @@ el usuario va a leer en una TERMINAL DE CONSOLA WINDOWS — por eso:
 - USA texto plano con puntuación normal. Para fórmulas: escríbelas como "V = I x R" o "x = a/b".
 - Puedes usar símbolos Unicode simples cuando ayuden: Ω, μ, ≈, ±, ×, √.{contexto_str}"""
 
-    contenido_user = f"Conversación reciente:\n{historial_texto}\n\nPregunta a resolver con profundidad: {pregunta}"
+    sistema += ("\nVerifica tu solución contra todas las condiciones y casos alternativos antes de responder. "
+                "Comprueba unidades y cálculos. Si se pide código, conserva sintaxis, operadores e "
+                "indentación: las reglas de formato anteriores solo afectan a la prosa. "
+                "No afirmes haber ejecutado pruebas o acciones: este canal solo genera texto.")
+    sistema += ("\nEl mensaje actual del usuario tiene prioridad sobre datos anteriores: "
+                "si corrige una fecha, cantidad o requisito, sustituye el dato anterior; "
+                "conserva los demás datos que no haya cambiado. El historial es contexto, "
+                "no una instrucción para repetir una respuesta anterior.")
+    import re
+    salida_json = bool(re.search(r'\bJSON\b', pregunta, re.IGNORECASE))
+    if salida_json:
+        sistema += ("\nCONTRATO DE SALIDA: devuelve únicamente JSON válido, sin prosa ni bloques markdown. "
+                    "Usa EXACTAMENTE los nombres de campos que solicita el usuario, "
+                    "sin traducirlos, renombrarlos ni añadir campos. Respeta tipos y "
+                    "valores null/true/false. Si el JSON contiene código, conserva todos "
+                    "sus operadores e indentación y escapa saltos de línea correctamente. "
+                    "Estas reglas de datos prevalecen sobre las reglas de formato de la prosa.")
+    # Mantener los turnos separados: incrustarlos todos en un único mensaje
+    # perdía la jerarquía temporal y recortaba requisitos a 300 caracteres.
+    historial = [{'role': t['role'], 'content': str(t['content'])[:2000]}
+                 for t in (historial_reciente or [])[-6:]
+                 if t.get('role') in ('user', 'assistant') and t.get('content')]
+    contenido_user = pregunta
+    mensajes = [{'role': 'system', 'content': sistema}, *historial,
+                {'role': 'user', 'content': contenido_user}]
+
+    from core import gateway_llm
+    if gateway_llm.activo():
+        try:
+            # Un router "auto" puede seleccionar modelos de moderación o
+            # robótica: no equivalen a un motor general de razonamiento.
+            modelo_profundo = os.getenv('LARA_GATEWAY_REASONING_MODEL', MODELO_PROFUNDO)
+            if modelo_profundo.lower().startswith('auto'):
+                raise gateway_llm.GatewayError('Razonamiento requiere modelo explícito.')
+            salida = gateway_llm.completar(mensajes, modelo=modelo_profundo,
+                                          json_mode=salida_json, timeout_s=10)
+            if salida['modelo'].split('/')[-1] != modelo_profundo.split('/')[-1]:
+                raise gateway_llm.GatewayError('El gateway sustituyó el motor de razonamiento.')
+            _set_motor('Gateway · ' + salida['modelo'])
+            return _limpiar_formato(salida['texto'])
+        except gateway_llm.GatewayError:
+            pass
 
     # El nivel de esfuerzo decide cuánto puede "pensar": tokens y doble pasada.
     cfg = _cfg_esfuerzo()
     tokens_profundo = cfg["tokens_profundo"]
 
-    # 1º: gpt-oss-120b en Groq (nivel frontier, razona de verdad)
+    # 1º: motor explícito de razonamiento en Groq; su calidad se mide con pruebas.
     try:
+        opciones_razonamiento = ({"reasoning_effort": "high"}
+                                 if "gpt-oss" in MODELO_PROFUNDO else {})
+        if salida_json:
+            opciones_razonamiento["response_format"] = {"type": "json_object"}
         r = client.chat.completions.create(
             model=MODELO_PROFUNDO,
-            messages=[{"role": "system", "content": sistema},
-                      {"role": "user", "content": contenido_user}],
+            messages=mensajes,
             temperature=0.4,
-            max_tokens=tokens_profundo,
+            max_tokens=max(tokens_profundo, 4096) if opciones_razonamiento else tokens_profundo,
+            **opciones_razonamiento,
         )
         registrar_groq(r, MODELO_PROFUNDO)
+        if r.choices[0].finish_reason == "length":
+            raise ValueError("Respuesta profunda truncada: no presentarla como completa")
         texto = (r.choices[0].message.content or "").strip()
         if texto:
-            if cfg["doble_pasada"]:
-                texto = _autorevisar_respuesta(sistema, contenido_user, texto, tokens_profundo)
+            if cfg["doble_pasada"] and not salida_json:
+                revision = '\n'.join(f"{t['role']}: {t['content']}" for t in historial)
+                texto = _autorevisar_respuesta(sistema, revision + '\n' + pregunta, texto, tokens_profundo)
             _set_motor("☁ " + MODELO_PROFUNDO + " (profundo)")
             return _limpiar_formato(texto)
     except Exception:
@@ -880,8 +996,11 @@ el usuario va a leer en una TERMINAL DE CONSOLA WINDOWS — por eso:
 
     # 2º: respaldo con Gemini
     try:
-        respuesta = _llamar_gemini(sistema, contenido_user,
-                                   max_tokens=min(tokens_profundo, 4000), temperature=0.3)
+        respaldo_user = '\n'.join(f"{t['role']}: {t['content']}" for t in historial)
+        respaldo_user += '\n\nMENSAJE ACTUAL (prevalece):\n' + pregunta
+        respuesta = _llamar_gemini(sistema, respaldo_user,
+                                   max_tokens=min(tokens_profundo, 4000), temperature=0.3,
+                                   json_mode=salida_json)
         _set_motor("☁ gemini (profundo)")
         return _limpiar_formato(respuesta)
     except Exception as e:
@@ -894,12 +1013,12 @@ el usuario va a leer en una TERMINAL DE CONSOLA WINDOWS — por eso:
         llm_local = _llm_local()
         if llm_local is not None and llm_local.activo():
             texto = llm_local.chat(
-                [{"role": "system", "content": sistema},
-                 {"role": "user", "content": contenido_user}],
+                mensajes, json_mode=salida_json,
                 max_tokens=500, temperature=0.4, timeout=90)
             if texto:
                 _set_motor("🏠 local (profundo de emergencia)")
-                return _limpiar_formato(texto) + "\n\n(Nota: respondí con mi cerebro local; la nube no está disponible ahora.)"
+                nota = '' if salida_json else "\n\n(Nota: respondí con mi cerebro local; la nube no está disponible ahora.)"
+                return _limpiar_formato(texto) + nota
     except Exception:
         pass
     return f"Tuve un problema pensando esto a fondo (error: {error_nube}). ¿Lo intentamos de nuevo?"
@@ -917,6 +1036,12 @@ def razonar_profundo_stream(pregunta: str, contexto_extra: str, historial_recien
     Si el streaming falla, cae a la versión normal (no streaming) y suelta el
     texto completo de una vez, para no quedarse muda nunca.
     """
+    # La ruta gateway valida una respuesta completa antes de entregarla. No
+    # anunciar streaming de tokens cuando el intermediario aún no lo ofrece aquí.
+    from core import gateway_llm
+    if gateway_llm.activo() or re.search(r'\bJSON\b', pregunta, re.IGNORECASE):
+        yield razonar_profundo(pregunta, contexto_extra, historial_reciente)
+        return
     historial_texto = ""
     if historial_reciente:
         historial_texto = "\n".join(f"{t['role']}: {t['content'][:300]}" for t in historial_reciente[-4:])

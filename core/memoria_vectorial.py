@@ -219,7 +219,7 @@ def _similitud_palabras(q: str, texto: str) -> float:
     return len(a & b) / len(a | b)
 
 
-def indexar(texto: str, role: str = "user") -> None:
+def indexar(texto: str, role: str = "user", *, generar_embedding: bool = True) -> None:
     """Guarda un fragmento en la memoria de largo plazo con su embedding."""
     if not texto or not texto.strip():
         return
@@ -233,7 +233,7 @@ def indexar(texto: str, role: str = "user") -> None:
     if _normalizar(limpio).startswith(_RUIDO_INICIO):   # errores/relleno del asistente
         return
     # El embedding se calcula FUERA del lock (puede tardar; local ~0.1s, nube ~0.5s)
-    vec, modelo = _embedding(limpio)
+    vec, modelo = _embedding(limpio) if generar_embedding else (None, None)
     with _lock:
         try:
             con = _conectar()

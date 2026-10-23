@@ -1,0 +1,49 @@
+[
+  {
+    "caso": "ayuda",
+    "pregunta": "ayuda",
+    "respuesta": "Estas son algunas cosas que puedes pedirme:\n• mis tareas / nueva tarea revisar el amplificador / completar tarea 3\n• mis recordatorios / cancelar recordatorio 2\n• temporizador 10 minutos / pomodoro (25 minutos)\n• recuérdame revisar el horno en 15 minutos\n• anota comprar resistencias\n• qué hora es / batería / info del sistema\n• abre calculadora / abre descargas\n• diagnóstico / estado de documentos\n• mis motores (configuración local y disponibilidad de claves)\n• sé breve / respuestas largas / repite / silencio\nLas tareas, temporizadores y recordatorios de esta lista funcionan sin IA.\nLos recordatorios vencidos se recuperan al abrir LARA; el programa debe estar abierto para avisar a tiempo.\nVisión, investigación y conversación avanzada dependen de los motores configurados.",
+    "segundos": 3.333,
+    "arranque_s": 3.789,
+    "motor": "",
+    "estados": [],
+    "evidencia": null
+  },
+  {
+    "caso": "tareas",
+    "pregunta": "nueva tarea revisar el amplificador",
+    "respuesta": "Tarea #1 guardada: revisar el amplificador",
+    "segundos": 3.209,
+    "arranque_s": 3.675,
+    "motor": "",
+    "estados": [],
+    "evidencia": {
+      "tareas": [
+        {
+          "id": 1,
+          "titulo": "revisar el amplificador",
+          "fecha_limite": "",
+          "prioridad": "media",
+          "proyecto": "",
+          "estado": "pendiente",
+          "creada": "2026-10-14T23:59"
+        }
+      ]
+    }
+  },
+  {
+    "caso": "calculo",
+    "pregunta": "Calcula la resistencia para un LED de 2 V y 20 mA conectado a 12 V. Indica resistencia y potencia disipada. No ejecutes herramientas.",
+    "respuesta": "Para un LED de 2 V y 20 mA alimentado con 12 V, la resistencia necesaria es R = (12 V − 2 V) / 0.02 A = 500 Ω. La potencia disipada en la resistencia es P = V_R·I = 10 V·0.02 A = 0.2 W (también I²·R = 0.2 W). Se recomienda usar una resistencia de al menos 0.5 W de potencia para margen de seguridad.",
+    "segundos": 4.731,
+    "arranque_s": 3.715,
+    "motor": "☁ openai/gpt-oss-120b",
+    "estados": [
+      [
+        6.94,
+        "LARA pensando..."
+      ]
+    ],
+    "evidencia": null
+  }
+]

@@ -18,12 +18,35 @@ La primera vez migra el historial plano antiguo a una sesión "Sesiones anterior
 
 import json
 import uuid
+import threading
 from pathlib import Path
 from datetime import datetime
 
 from config import KNOWLEDGE_DIR
 
 RAIZ = KNOWLEDGE_DIR / "sesiones"
+_lock = threading.RLock()
+
+
+def guardar_estado_codigo(sid, carpeta, pendiente, artefactos=None):
+    with _lock:
+        data = cargar_sesion('code', sid) or {'id': sid, 'titulo': 'Code: ' + Path(carpeta).name,
+                                            'creado': _ahora(), 'turnos': []}
+        data['carpeta'] = str(carpeta)
+        data['pendiente'] = pendiente
+        if artefactos is not None:
+            data['artefactos'] = artefactos
+        data['actualizado'] = _ahora()
+        _guardar_atomico(_ruta('code', sid), data)
+
+
+def _guardar_atomico(ruta, data):
+    temporal = ruta.with_suffix('.' + uuid.uuid4().hex + '.tmp')
+    try:
+        temporal.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        temporal.replace(ruta)
+    finally:
+        temporal.unlink(missing_ok=True)
 
 
 def _dir_espacio(espacio: str) -> Path:
@@ -88,7 +111,7 @@ def guardar_turno(espacio: str, sid: str, role: str, content: str) -> None:
     # Auto-título con el primer mensaje del usuario
     if data.get("titulo") in ("", "Nueva conversación") and role == "user":
         data["titulo"] = content.strip().replace("\n", " ")[:48] or "Conversación"
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _guardar_atomico(p, data)
 
     # Memoria semántica de largo plazo (Mejora 4): indexamos las conversaciones
     # normales por SIGNIFICADO para poder recuperarlas luego aunque se pregunte
@@ -97,7 +120,9 @@ def guardar_turno(espacio: str, sid: str, role: str, content: str) -> None:
     if espacio == "chat":
         try:
             from core.memoria_vectorial import indexar
-            indexar(content, role)
+            # Guardar el chat nunca espera redes ni inferencia. La recuperación
+            # léxica sigue disponible; reindexar_embeddings enriquece después.
+            indexar(content, role, generar_embedding=False)
         except Exception:
             pass
 

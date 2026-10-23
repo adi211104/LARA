@@ -7,8 +7,9 @@ requires-python = ">=3.12"
 authors = [{ name = "Adi" }]
 
 # Dependencias de ejecución. La lista canónica y comentada sigue en
-# requirements.txt (que usa INICIAR_LARA.bat); aquí se replican para que
-# `pip install .` o herramientas de empaquetado funcionen.
+# requirements.txt; las versiones exactas verificadas están en
+# requirements.lock (lo que instala INSTALAR_LARA.bat). Esta lista debe
+# coincidir con requirements.txt: tests/test_instalacion.py lo comprueba.
 dependencies = [
     "groq",
     "google-genai",
@@ -23,6 +24,9 @@ dependencies = [
     "numpy",
     "miniaudio",
     "pyttsx3",
+    "kokoro-onnx",
+    "espeakng-loader",
+    "phonemizer-fork",
     "faster-whisper",
     "openwakeword",
     "pypdf",
@@ -34,9 +38,15 @@ dependencies = [
     "python_speech_features",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest"]
+
 [project.scripts]
 lara = "main:main"
 
 [tool.setuptools]
 py-modules = ["main", "config", "ui_tema", "gui", "gui_explicacion", "gui_opencode"]
 packages = ["core"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

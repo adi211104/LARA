@@ -1,34 +1,26 @@
-"""
-ui_tema.py — Tema visual ÚNICO de LARA (modo claro, estilo HUD técnico).
+"""Tema único de LARA: un espacio oscuro, cálido y legible.
 
-Inspirado en los paneles holográficos de diagnóstico (azul técnico + naranja
-de energía sobre fondo claro). TODA la interfaz importa sus colores de aquí:
-gui.py, gui_opencode.py, gui_explicacion.py y cualquier diálogo nuevo.
-
-Reglas de uso (acordadas con Adi):
-  - VERDE se usa ÚNICAMENTE en las pestañas "Chat" y "Open Code" de la cabecera.
-  - ACENTO (cian técnico) es el color principal de bordes, títulos y botones.
-  - NARANJA es para resaltes puntuales: estados activos, alertas, energía,
-    elementos destacados de los diagramas. No abusar.
-  - FONDO claro con PANEL blanco para tarjetas; TEXTO azul marino.
+La interfaz usa capas suaves en vez de bordes duros: fondo profundo, tarjetas
+elevadas, acento turquesa y naranja reservado para actividad. Todos los paneles
+importan estas constantes para mantener una identidad coherente.
 """
 
-# ── Paleta (modo claro) ─────────────────────────────────────────
-FONDO    = "#F2F6FA"   # fondo general: claro con tinte azulado
-PANEL    = "#FFFFFF"   # paneles, tarjetas, zonas de contenido
-BORDE    = "#C6D8E6"   # bordes suaves de paneles
-TEXTO    = "#13293D"   # azul marino oscuro: texto principal
-SUAVE    = "#5B7C99"   # texto secundario / etiquetas apagadas
-ACENTO   = "#0E7CA8"   # cian técnico: acento principal (botones, títulos, bordes activos)
-ACENTO_2 = "#63B3D1"   # cian claro: líneas finas, decoración HUD
-NARANJA  = "#E8801A"   # naranja de energía: resaltes, estados activos, alertas
-VERDE    = "#0B7324"   # SOLO pestañas Chat / Open Code
+# ── Paleta ───────────────────────────────────────────────────────
+FONDO    = "#0B1220"   # azul noche, no negro puro: descansa la vista
+PANEL    = "#141E2E"   # superficie principal / tarjetas
+ELEVADO  = "#0F1928"   # campos, barras y superficie interior
+BORDE    = "#29384D"   # separación discreta entre capas
+TEXTO    = "#E8EEF6"   # texto cálido de alto contraste
+SUAVE    = "#9AAABD"   # metadatos y etiquetas secundarias
+ACENTO   = "#63D9C4"   # turquesa: acciones primarias y foco
+TEXTO_ACENTO = "#06211F"  # texto legible sobre turquesa
+ACENTO_2 = "#23475A"   # superficies activas / burbujas de LARA
+BURBUJA_USUARIO = "#263247"
+NARANJA  = "#FFB45D"   # actividad, alertas y detalles energéticos
+VERDE    = "#63D9C4"   # compatibilidad: pestaña activa
 
 # ── Tipografía ──────────────────────────────────────────────────
-FUENTE   = ("Georgia", 12)
-FUENTE_B = ("Georgia", 12, "bold")
-FUENTE_I = ("Georgia", 12, "italic")
-FUENTE_T = ("Georgia", 16, "bold")   # títulos grandes (paneles/diagramas)
-
-# Compatibilidad con el código anterior (BG oscuro ya no existe):
-# los módulos deben migrar a FONDO/TEXTO/ACENTO; no añadir alias oscuros aquí.
+FUENTE   = ("Segoe UI", 10)
+FUENTE_B = ("Segoe UI Semibold", 10)
+FUENTE_I = ("Segoe UI", 10, "italic")
+FUENTE_T = ("Segoe UI Semibold", 18)

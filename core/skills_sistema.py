@@ -103,7 +103,7 @@ def _volumen_set(valor):
 
 def _bloquear():
     try:
-        subprocess.Popen("rundll32.exe user32.dll,LockWorkStation", shell=True)
+        subprocess.Popen(["rundll32.exe", "user32.dll,LockWorkStation"])
         return {"mensaje": "Bloqueando el equipo. Hasta pronto."}
     except Exception as e:
         return {"error": str(e), "mensaje": "No pude bloquear el equipo."}

@@ -1,0 +1,66 @@
+[
+  {
+    "caso": "sintesis",
+    "referencia": "Lara abre el bloc de notas",
+    "motor": "kokoro",
+    "segundos": 10.32
+  },
+  {
+    "caso": "sintesis",
+    "referencia": "Recuérdame revisar el amplificador en quince minutos",
+    "motor": "kokoro",
+    "segundos": 4.045
+  },
+  {
+    "caso": "sintesis",
+    "referencia": "Busca en internet cómo funciona un transistor",
+    "motor": "kokoro",
+    "segundos": 3.811
+  },
+  {
+    "caso": "transcripcion",
+    "muestra": 0,
+    "referencia": "Lara abre el bloc de notas",
+    "texto": "Lara abre el bloc de notas.",
+    "error": null,
+    "segundos": 4.402,
+    "wer": 0.0,
+    "local_disponible": false
+  },
+  {
+    "caso": "transcripcion",
+    "muestra": 1,
+    "referencia": "Recuérdame revisar el amplificador en quince minutos",
+    "texto": "Recuérdame revisar el amplificador en 15 minutos.",
+    "error": null,
+    "segundos": 0.517,
+    "wer": 0.143,
+    "local_disponible": false
+  },
+  {
+    "caso": "transcripcion",
+    "muestra": 2,
+    "referencia": "Busca en internet cómo funciona un transistor",
+    "texto": "Busca en Internet cómo funciona un transistor.",
+    "error": null,
+    "segundos": 0.486,
+    "wer": 0.0,
+    "local_disponible": false
+  },
+  {
+    "caso": "transcripcion",
+    "muestra": 3,
+    "referencia": "Lara abre el bloc de notas",
+    "texto": "Clara abre el bloc de notas.",
+    "error": null,
+    "segundos": 0.816,
+    "wer": 0.167,
+    "local_disponible": false
+  },
+  {
+    "caso": "silencio",
+    "texto": null,
+    "error": "Eso no suena a voz (¿micrófono desconectado o ruido?).",
+    "segundos": 0.002
+  }
+]

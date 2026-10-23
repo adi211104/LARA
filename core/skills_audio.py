@@ -15,6 +15,7 @@ La configuración se guarda en KNOWLEDGE_DIR/audio_config.json (sincronizado por
 OneDrive como el resto), pero los índices de dispositivo se validan en cada PC.
 """
 
+import os
 import json
 import time
 import ctypes
@@ -153,18 +154,57 @@ def grabar_vad(espera_inicio: float = 8.0, fin_silencio: float = 1.0,
       1. Espera hasta 'espera_inicio' s a que empieces a hablar.
       2. Graba mientras hablas y para tras 'fin_silencio' s de silencio,
          o al llegar a 'max_frase' s.
-    Así no corta a mitad de frase ni graba un tiempo fijo arbitrario.
-    Devuelve (bytes_int16, sample_rate, voz_dur, t_inicio_voz). 't_inicio_voz'
-    es el time.time() en que empezó la voz: sirve para saber si LARA estaba
-    hablando en ese momento (anti-eco). Lanza RuntimeError si no detecta voz.
+    Antes de cortar por silencio, una COMPUERTA SEMÁNTICA (core/turno_habla.py)
+    evalúa si tu idea ya está completa; si no, extiende la grabación en vez de
+    cortarte a media frase por una pausa para pensar (ver _grabar_vad_impl).
+    Devuelve (bytes_int16, sample_rate, voz_dur, t_inicio_voz, texto_parcial).
+    't_inicio_voz' es el time.time() en que empezó la voz: sirve para saber si
+    LARA estaba hablando en ese momento (anti-eco). 'texto_parcial' es la
+    transcripción que la compuerta semántica YA HIZO durante la pausa final (o
+    None): si es válida, el llamador se ahorra transcribir el audio OTRA VEZ
+    (antes cada frase pagaba Whisper dos veces: una para evaluar el turno y
+    otra en transcribir_crudo). Lanza RuntimeError si no detecta voz.
     """
     with _mic_lock:
         return _grabar_vad_impl(espera_inicio, fin_silencio, max_frase, sample_rate)
 
 
+# Calibración de ruido de fondo cacheada entre llamadas. En escucha continua
+# grabar_vad() se llama una vez por frase; recalibrar CADA vez deja ~0.3 s
+# "ciegos" en los que, si ya estabas hablando, tu voz se mide como ruido y
+# sube el umbral -> la frase se pierde y tienes que repetir. Reutilizar la
+# última calibración (mismo dispositivo, reciente) evita esa ventana.
+_calibracion = {"base": None, "device": "__sin_calibrar__", "ts": 0.0}
+_CALIBRACION_VIGENCIA = 45.0  # s
+
+
+def _calibrar_ambiente(stream, bloque, rms, device):
+    ahora = time.time()
+    if (_calibracion["base"] is not None and _calibracion["device"] == device
+            and ahora - _calibracion["ts"] < _CALIBRACION_VIGENCIA):
+        return _calibracion["base"]
+    ambiente = []
+    for _ in range(10):
+        data, _ = stream.read(bloque)
+        ambiente.append(rms(bytes(data)))
+    base = sorted(ambiente)[len(ambiente) // 2]  # mediana
+    _calibracion["base"] = base
+    _calibracion["device"] = device
+    _calibracion["ts"] = ahora
+    return base
+
+
+# Margen extra de silencio que se concede cuando la compuerta semántica dice
+# INCOMPLETO (o todavía no contestó): tope duro para que, si el evaluador
+# falla o el hablante se calla del todo, la grabación no se quede colgada.
+_EXTENSION_MAX = float(os.environ.get("LARA_TURNO_EXTENSION", "1.8"))
+
+
 def _grabar_vad_impl(espera_inicio, fin_silencio, max_frase, sample_rate):
     import sounddevice as sd
     import numpy as np
+    import threading
+    from core import stt_local, turno_habla
 
     device = get_input_device()
     bloque = int(0.03 * sample_rate)  # 30 ms por bloque
@@ -186,17 +226,17 @@ def _grabar_vad_impl(espera_inicio, fin_silencio, max_frase, sample_rate):
         return float(np.sqrt(np.mean(x * x)) + 1e-6) if x.size else 0.0
 
     try:
-        # Calibrar ruido ambiente (~0.3 s)
-        ambiente = []
-        for _ in range(10):
-            data, _ = stream.read(bloque)
-            ambiente.append(rms(bytes(data)))
-        base = sorted(ambiente)[len(ambiente) // 2]  # mediana
-        # Umbral SENSIBLE (capta susurros: 1.6x el ruido, mínimo 200).
+        base = _calibrar_ambiente(stream, bloque, rms, device)
+        # Umbral SENSIBLE (capta susurros: 1.6x el ruido, mínimo 140).
         # La protección contra golpes/ruido no está en el umbral sino en exigir
         # VOZ SOSTENIDA: 3 bloques seguidos (~90 ms) para considerar que hablas.
         # Un golpe o clic es un pico de 1-2 bloques y no dispara la grabación.
-        umbral = max(base * 1.6, 200.0)
+        # Piso 140 (antes 200): con micrófonos de poca ganancia o hablando
+        # suave, muchos bloques de voz REAL quedaban bajo 200 — la grabación
+        # tardaba en dispararse y 'voz_dur' salía tan corta que la frase se
+        # descartaba como ruido ("tengo que repetir varias veces"). Ajustable
+        # con LARA_VAD_PISO si tu ambiente es muy ruidoso.
+        umbral = max(base * 1.6, float(os.environ.get("LARA_VAD_PISO", "140")))
 
         frames = []
         pre_roll = []          # último medio segundo antes de detectar voz (no corta el arranque)
@@ -207,6 +247,33 @@ def _grabar_vad_impl(espera_inicio, fin_silencio, max_frase, sample_rate):
         espera_acum = 0.0
         dur = 0.0
         bloques_con_voz = 0    # cuánta VOZ real hubo (para validar después)
+
+        # ── Compuerta semántica de turno (streaming STT + evaluador) ──────
+        # Al llegar al silencio base NO se corta directo: se transcribe lo
+        # grabado hasta ahora y turno_habla.evaluar_turno() decide si la idea
+        # está completa. Corre en un hilo aparte para no bloquear la captura
+        # del micrófono mientras se evalúa.
+        gate = turno_habla.ACTIVO
+        evaluando = {"activo": False, "resultado": None, "gen": 0, "texto": None}
+        # La evaluación arranca ANTES de llegar a fin_silencio (a ~la mitad de
+        # la pausa): así, cuando el silencio sí alcanza el umbral de corte, el
+        # veredicto (y la transcripción) suelen estar YA listos y el corte es
+        # inmediato, en vez de sumar el tiempo de Whisper DESPUÉS de la pausa.
+        umbral_eval = min(0.33, fin_silencio * 0.55)
+
+        def _evaluar_en_fondo(snapshot: bytes, gen: int):
+            try:
+                texto = stt_local.transcribir(snapshot, sample_rate)
+            except Exception:
+                texto = None
+            # texto None = Whisper local no disponible: sin señal semántica,
+            # comportarse como el VAD clásico (cortar).
+            veredicto = True if texto is None else turno_habla.evaluar_turno(texto)
+            if evaluando["gen"] == gen:   # descarta si el hablante ya retomó
+                evaluando["resultado"] = veredicto
+                evaluando["texto"] = texto  # reutilizable: evita transcribir 2 veces
+            evaluando["activo"] = False
+
         while True:
             data, _ = stream.read(bloque)
             data = bytes(data)
@@ -224,18 +291,53 @@ def _grabar_vad_impl(espera_inicio, fin_silencio, max_frase, sample_rate):
                     bloques_con_voz += racha_voz
                 elif espera_acum >= espera_inicio:
                     raise RuntimeError("No detecté que hablaras.")
+                continue
+
+            frames.append(data)
+            dur += 0.03
+            if nivel > umbral:
+                bloques_con_voz += 1
+                silencio_acum = 0.0
+                if evaluando["resultado"] is not None or evaluando["activo"]:
+                    # Retomó la voz: invalida cualquier veredicto pendiente de
+                    # la pausa anterior (era sobre un texto ya viejo).
+                    evaluando["resultado"] = None
+                    evaluando["texto"] = None
+                    evaluando["gen"] += 1
             else:
-                frames.append(data)
-                dur += 0.03
-                if nivel > umbral:
-                    bloques_con_voz += 1
-                    silencio_acum = 0.0
-                else:
-                    silencio_acum += 0.03
-                if silencio_acum >= fin_silencio or dur >= max_frase:
-                    break
+                silencio_acum += 0.03
+
+            if dur >= max_frase:
+                break
+            # Lanzar la evaluación semántica en cuanto la pausa "pinta" a final
+            # (umbral_eval < fin_silencio): corre en paralelo mientras se sigue
+            # esperando, y su transcripción se reutiliza al salir.
+            if (gate and silencio_acum >= umbral_eval
+                    and not evaluando["activo"] and evaluando["resultado"] is None):
+                evaluando["activo"] = True
+                gen = evaluando["gen"]
+                snap = b"".join(frames)
+                threading.Thread(target=_evaluar_en_fondo, args=(snap, gen),
+                                 daemon=True).start()
+            if silencio_acum < fin_silencio:
+                continue
+            if not gate:
+                break
+            if evaluando["resultado"] is True:
+                break
+            if silencio_acum >= fin_silencio + _EXTENSION_MAX:
+                break  # tope duro: el evaluador no llegó a tiempo o dijo que sigues
+
         voz_dur = bloques_con_voz * 0.03  # segundos de voz real dentro de la grabación
-        return b"".join(frames), sample_rate, voz_dur, (t_inicio_voz or time.time())
+        # Transcripción reutilizable: solo si pertenece a ESTA toma (no hubo voz
+        # nueva después del snapshot que evaluó la compuerta) Y trajo texto. Si
+        # vino vacía o dudosa (None), NO se reutiliza: el llamador transcribe
+        # completo y puede escalar a Whisper en la nube, que entiende más.
+        texto_parcial = (evaluando["texto"]
+                         if evaluando["resultado"] is not None and evaluando["texto"]
+                         else None)
+        return (b"".join(frames), sample_rate, voz_dur,
+                (t_inicio_voz or time.time()), texto_parcial)
     finally:
         try:
             stream.stop(); stream.close()

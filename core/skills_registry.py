@@ -19,10 +19,16 @@ import json
 import ast as _ast
 import re as _re
 import subprocess
+import os
 from pathlib import Path
 from config import KNOWLEDGE_DIR, CORE_DIR
 
 REGISTRO_PATH = KNOWLEDGE_DIR / "skills_registry.json"
+
+
+def _habilitado_en_desarrollo() -> bool:
+    """Las skills dinámicas están pausadas hasta que tengan manifiesto seguro."""
+    return os.environ.get("LARA_ENABLE_EXPERIMENTAL_TOOLS", "0").strip() == "1"
 
 # Módulos internos de LARA que nunca son skills ejecutables
 _MODULOS_INTERNOS = {
@@ -225,6 +231,9 @@ def auto_registrar_skills_core() -> list:
     que usen sys.argv y no estén ya en el registro.
     Además: migra rutas antiguas a relativas y repara rutas rotas.
     """
+    if not _habilitado_en_desarrollo():
+        return []
+
     # Migración y reparación silenciosas antes de registrar nuevas
     migrar_rutas_absolutas()
     reparadas = reparar_rutas_rotas()
@@ -300,6 +309,10 @@ def ejecutar_skill_registrada(nombre: str, argumento: str = "") -> dict:
     Ejecuta una skill registrada. Resuelve la ruta con fallbacks multi-PC.
     Si la skill no está en el registro pero existe en CORE_DIR, la registra al vuelo.
     """
+    if not _habilitado_en_desarrollo():
+        return {"error": ("Las skills ejecutables están pausadas durante la Fase 1 "
+                          "de estabilización. No se ejecutó ninguna skill.")}
+
     reg = _cargar()
 
     if nombre not in reg:

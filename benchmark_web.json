@@ -1,0 +1,21 @@
+[
+  {
+    "consulta": "site:docs.python.org/3/tutorial listas Python",
+    "segundos": 2.637,
+    "respuesta": "Las comprensiones de listas en Python son una forma concisa de crear nuevas listas. Este capítulo describe en detalle el tipo de dato lista y sus aplicaciones comunes.",
+    "urls": [
+      "https://translate.google.com/translate?u=https://docs.python.org/3/tutorial/datastructures.html&hl=es&sl=en&tl=es&client=srp"
+    ]
+  },
+  {
+    "consulta": "site:nasa.gov Moon facts",
+    "segundos": 2.612,
+    "respuesta": "La Luna es el único satélite natural de la Tierra, con un diámetro de 2,159 millas (3,475 kilómetros), aproximadamente 1/4 del tamaño de la Tierra. Su distancia promedio es de 238,855 millas. La Luna, como la Tierra, tiene tres capas principales: corteza, manto y núcleo, y estuvo fundida hace miles de millones de años. La Tierra y la Luna están acopladas por las mareas.",
+    "urls": [
+      "https://science.nasa.gov/moon/facts/",
+      "https://science.nasa.gov/moon/",
+      "https://nightsky.jpl.nasa.gov/club/attachments/Fun_Facts_About_the_Moon.pdf",
+      "https://spaceplace.nasa.gov/all-about-the-moon/en/"
+    ]
+  }
+]

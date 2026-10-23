@@ -1,0 +1,9 @@
+# Solo entorno separado Python 3.10–3.12; no instalar en el entorno principal.
+# Rangos de integración; esta máquina no ha validado un entrenamiento GPU.
+torch>=2.5,<3
+transformers>=4.46,<6
+datasets>=3,<5
+peft>=0.14,<1
+trl>=0.15,<1
+accelerate>=1,<2
+bitsandbytes>=0.45,<1; platform_system != "Darwin"

@@ -1,20 +1,12 @@
-"""
-gui.py — Interfaz gráfica de LARA (modo claro, estilo HUD técnico, ordenado).
+"""Interfaz gráfica de LARA.
 
-- Cabecera: título ◢ LARA + pestañas 💬 Chat / 💻 Open Code a la izquierda
-  (VERDE solo aquí, por pedido de Adi), estado a la derecha (NARANJA cuando
-  procesa, SUAVE en reposo).
-- Barra lateral: ➕ Nueva sesión y RECIENTES (clic abre; clic derecho elimina).
-- Centro: chat sobre panel blanco con borde. Al explicar un tema, el chat se
-  reemplaza por un panel de slides animados DENTRO de la misma ventana.
-- Debajo de la barra de entrada: selector de esfuerzo (como en Claude Desktop)
-  que cambia el nivel de core.llm_engine y muestra el modelo activo.
-- Escucha SIEMPRE activa: háblale cuando quieras. Mientras LARA habla, di
-  "LARA, ..." para interrumpirla; di "LARA silencio" para que deje de hablar.
-- Config: uso de tokens, candado de voz, ENTRENAMIENTO de voz por frases
-  (voz_id), prueba "¿Quién habla?" y dispositivos de audio.
+Diseño: espacio oscuro de capas suaves, cabecera de producto, sesiones a la
+izquierda, conversación con burbujas diferenciadas y una entrada principal
+destacada. Al explicar un tema, el chat se sustituye por slides dentro de la
+misma ventana. La voz, los controles de sesión y la configuración conservan su
+comportamiento; el rediseño es estrictamente de presentación.
 
-Colores: TODOS vienen de ui_tema.py (modo claro). Nada de paletas locales.
+Todos los colores y tipografías vienen de :mod:`ui_tema`.
 """
 
 import os
@@ -28,12 +20,11 @@ from tkinter import filedialog, scrolledtext
 from config import ADMIN_NOMBRE
 from core.cerebro import LaraCerebro
 from core.agente_fondo import iniciar_agente_fondo
-from core.skills_registry import auto_registrar_skills_core
-from core import skills_voz, skills_audio, sesiones, uso_tokens, voz_id
+from core import skills_voz, skills_audio, sesiones, uso_tokens, voz_id, modos
 from gui_explicacion import PanelExplicacion
 from gui_opencode import OpenCodePanel
-from ui_tema import (FONDO, PANEL, BORDE, TEXTO, SUAVE, ACENTO, ACENTO_2,
-                     NARANJA, VERDE, FUENTE, FUENTE_B, FUENTE_I, FUENTE_T)
+from ui_tema import (FONDO, PANEL, ELEVADO, BORDE, TEXTO, SUAVE, ACENTO, ACENTO_2,
+                     BURBUJA_USUARIO, TEXTO_ACENTO, NARANJA, VERDE, FUENTE, FUENTE_B, FUENTE_I, FUENTE_T)
 
 # Otro agente implementa NIVELES_ESFUERZO / set_nivel_esfuerzo / get_nivel_esfuerzo /
 # modelo_del_nivel en core.llm_engine; programamos contra ese contrato con red de seguridad.
@@ -70,8 +61,8 @@ class LaraGUI:
 
         root.title("LARA — Asistente del Taller")
         root.configure(bg=FONDO)
-        root.geometry("1020x720")
-        root.minsize(820, 560)
+        root.geometry("1180x780")
+        root.minsize(900, 620)
 
         self.cerebro = LaraCerebro(
             on_status=self._status_safe,
@@ -146,39 +137,47 @@ class LaraGUI:
 
     # ── UI ──────────────────────────────────────────────────────
     def _construir_ui(self):
-        # Cabecera: título + pestañas a la izquierda, estado a la derecha
-        header = tk.Frame(self.root, bg=FONDO, highlightthickness=1, highlightbackground=BORDE)
-        header.pack(fill="x", padx=10, pady=(10, 0))
-        tk.Label(header, text="◢ LARA", font=FUENTE_B, fg=ACENTO, bg=FONDO).pack(side="left", padx=12, pady=8)
-        # Pestañas Chat / Open Code: ÚNICO lugar de la interfaz donde se usa VERDE
+        # Cabecera: una barra de producto, no un título técnico aislado.
+        header = tk.Frame(self.root, bg=PANEL, highlightthickness=1, highlightbackground=BORDE)
+        header.pack(fill="x", padx=18, pady=(16, 0), ipady=2)
+        marca = tk.Frame(header, bg=PANEL)
+        marca.pack(side="left", padx=(16, 18), pady=9)
+        tk.Label(marca, text="✦", font=("Segoe UI Symbol", 19), fg=ACENTO, bg=PANEL).pack(side="left", padx=(0, 8))
+        texto_marca = tk.Frame(marca, bg=PANEL)
+        texto_marca.pack(side="left")
+        tk.Label(texto_marca, text="LARA", font=("Segoe UI Semibold", 15), fg=TEXTO, bg=PANEL).pack(anchor="w")
+        tk.Label(texto_marca, text="asistente local", font=("Segoe UI", 8), fg=SUAVE, bg=PANEL).pack(anchor="w")
+        # Pestañas Chat / Open Code
         self.btn_tab_chat = tk.Button(header, text="💬 Chat", command=lambda: self._mostrar_tab("chat"),
-                                      font=FUENTE_B, bg=VERDE, fg="#FFFFFF",
-                                      activebackground=VERDE, activeforeground="#FFFFFF",
-                                      relief="flat", padx=10, pady=2, cursor="hand2", bd=0)
-        self.btn_tab_chat.pack(side="left", padx=(6, 2), pady=6)
+                                      font=FUENTE_B, bg=ACENTO, fg=TEXTO_ACENTO,
+                                      activebackground=ACENTO, activeforeground=TEXTO_ACENTO,
+                                      relief="flat", padx=13, pady=6, cursor="hand2", bd=0)
+        self.btn_tab_chat.pack(side="left", padx=(0, 4), pady=8)
         self.btn_tab_code = tk.Button(header, text="💻 Open Code", command=lambda: self._mostrar_tab("code"),
-                                      font=FUENTE_B, bg=FONDO, fg=VERDE,
-                                      activebackground=VERDE, activeforeground="#FFFFFF",
-                                      relief="flat", padx=10, pady=2, cursor="hand2", bd=0)
-        self.btn_tab_code.pack(side="left", padx=2, pady=6)
-        self.lbl_estado = tk.Label(header, text="● escuchando", font=FUENTE, fg=SUAVE, bg=FONDO)
-        self.lbl_estado.pack(side="right", padx=12)
+                                      font=FUENTE_B, bg=ELEVADO, fg=SUAVE,
+                                      activebackground=ACENTO_2, activeforeground=TEXTO,
+                                      relief="flat", padx=13, pady=6, cursor="hand2", bd=0)
+        self.btn_tab_code.pack(side="left", padx=4, pady=8)
+        self.lbl_estado = tk.Label(header, text="●  Escuchando", font=FUENTE_B, fg=ACENTO, bg=ELEVADO,
+                                    padx=12, pady=6)
+        self.lbl_estado.pack(side="right", padx=14, pady=8)
 
         cont = tk.Frame(self.root, bg=FONDO)
-        cont.pack(fill="both", expand=True, padx=10, pady=10)
+        cont.pack(fill="both", expand=True, padx=18, pady=14)
 
         # ── Barra lateral: solo Nueva sesión + RECIENTES ────────
-        lateral = tk.Frame(cont, bg=FONDO, width=232, highlightthickness=1, highlightbackground=BORDE)
+        lateral = tk.Frame(cont, bg=PANEL, width=252, highlightthickness=1, highlightbackground=BORDE)
         lateral.pack(side="left", fill="y")
         lateral.pack_propagate(False)
+        tk.Label(lateral, text="TU ESPACIO", font=("Segoe UI Semibold", 9), fg=SUAVE, bg=PANEL).pack(anchor="w", padx=16, pady=(16, 6))
         self._boton(lateral, "➕  Nueva sesión", self._nueva_sesion, ancho=True)
         tk.Frame(lateral, bg=BORDE, height=1).pack(fill="x", padx=10, pady=4)
-        tk.Label(lateral, text="RECIENTES", font=FUENTE, fg=SUAVE, bg=FONDO).pack(anchor="w", padx=12, pady=(4, 2))
+        tk.Label(lateral, text="CONVERSACIONES RECIENTES", font=("Segoe UI Semibold", 8), fg=SUAVE, bg=PANEL).pack(anchor="w", padx=16, pady=(10, 5))
         self.lista = tk.Listbox(lateral, bg=PANEL, fg=TEXTO, relief="flat", font=FUENTE,
-                                selectbackground=ACENTO, selectforeground=PANEL,
+                                selectbackground=ACENTO_2, selectforeground=TEXTO,
                                 activestyle="none", bd=0, highlightthickness=1,
-                                highlightbackground=BORDE)
-        self.lista.pack(fill="both", expand=True, padx=8, pady=4)
+                                highlightbackground=PANEL)
+        self.lista.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.lista.bind("<<ListboxSelect>>", self._click_sesion)
         self.lista.bind("<Button-3>", self._menu_sesion)        # clic derecho
         self._sesion_ids = []
@@ -188,36 +187,50 @@ class LaraGUI:
         self._menu_idx = None
 
         # ── Panel principal (pestañas: Chat / Open Code) ─
-        self.principal = tk.Frame(cont, bg=FONDO)
-        self.principal.pack(side="left", fill="both", expand=True, padx=(10, 0))
-        self.tab_chat = tk.Frame(self.principal, bg=FONDO)
+        self.principal = tk.Frame(cont, bg=PANEL, highlightthickness=1, highlightbackground=BORDE)
+        self.principal.pack(side="left", fill="both", expand=True, padx=(14, 0))
+        self.tab_chat = tk.Frame(self.principal, bg=PANEL)
         self.tab_chat.pack(fill="both", expand=True)
         principal = self.tab_chat  # los widgets del chat viven dentro de su pestaña
 
+        cab_chat = tk.Frame(principal, bg=PANEL)
+        cab_chat.pack(fill="x", padx=18, pady=(16, 8))
+        tk.Label(cab_chat, text="Conversación", font=FUENTE_T, fg=TEXTO, bg=PANEL).pack(side="left")
+        tk.Label(cab_chat, text="Tu espacio privado de trabajo", font=FUENTE, fg=SUAVE, bg=PANEL).pack(side="left", padx=12, pady=(5, 0))
+
         # Chip de documento activo (arriba del chat)
-        self.fila_doc = tk.Frame(principal, bg=PANEL, highlightthickness=1, highlightbackground=BORDE)
-        self.lbl_doc = tk.Label(self.fila_doc, text="", font=FUENTE, fg=ACENTO, bg=PANEL)
+        self.fila_doc = tk.Frame(principal, bg=ELEVADO, highlightthickness=1, highlightbackground=BORDE)
+        self.lbl_doc = tk.Label(self.fila_doc, text="", font=FUENTE, fg=ACENTO, bg=ELEVADO)
         self.lbl_doc.pack(side="left", padx=(10, 6), pady=4)
         tk.Button(self.fila_doc, text="✕", command=self._quitar_documento, font=FUENTE_B,
-                  bg=PANEL, fg=SUAVE, activebackground=PANEL, activeforeground=NARANJA,
+                  bg=ELEVADO, fg=SUAVE, activebackground=ELEVADO, activeforeground=NARANJA,
                   relief="flat", cursor="hand2", bd=0).pack(side="right", padx=8)
 
         # Contenedor central (chat o panel de explicación)
-        self.centro = tk.Frame(principal, bg=PANEL, highlightthickness=1, highlightbackground=BORDE)
-        self.centro.pack(fill="both", expand=True)
+        self.centro = tk.Frame(principal, bg=ELEVADO, highlightthickness=1, highlightbackground=BORDE)
+        self.centro.pack(fill="both", expand=True, padx=18)
         self.chat = scrolledtext.ScrolledText(
-            self.centro, wrap="word", font=FUENTE, bg=PANEL, fg=TEXTO,
-            insertbackground=TEXTO, relief="flat", padx=14, pady=12, state="disabled",
+            self.centro, wrap="word", font=FUENTE, bg=ELEVADO, fg=TEXTO,
+            insertbackground=TEXTO, relief="flat", padx=18, pady=16, state="disabled",
             highlightthickness=0)
         self.chat.pack(fill="both", expand=True)
         self.chat.tag_config("lara", foreground=ACENTO, font=FUENTE_B)
-        self.chat.tag_config("yo", foreground=TEXTO, font=FUENTE_B)
+        self.chat.tag_config("yo", foreground=NARANJA, font=FUENTE_B)
         self.chat.tag_config("sys", foreground=SUAVE, font=FUENTE_I)
         self.chat.tag_config("cuerpo", foreground=TEXTO, font=FUENTE)
+        self.chat.tag_config("burbuja_lara", background=ACENTO_2, foreground=TEXTO, lmargin1=10, lmargin2=10, rmargin=80, spacing1=3, spacing3=11)
+        self.chat.tag_config("burbuja_yo", background=BURBUJA_USUARIO, foreground=TEXTO, lmargin1=80, lmargin2=10, rmargin=10, spacing1=3, spacing3=11)
 
         # Botonera del chat: UNA sola fila con espaciado uniforme
-        barra = tk.Frame(principal, bg=FONDO)
-        barra.pack(fill="x", pady=(8, 4))
+        accesos = tk.Frame(principal, bg=PANEL)
+        accesos.pack(fill="x", padx=14, pady=(8, 0))
+        for etiqueta, orden in (("✦ Qué puedo hacer", "ayuda"), ("Mis tareas", "mis tareas"),
+                                ("Recordatorios", "mis recordatorios"), ("Mis motores", "mis motores"),
+                                ("Aprendizaje", "aprendizaje")):
+            self._boton(accesos, etiqueta,
+                        lambda p=orden: self._encolar(lambda: self.cerebro.procesar(p), (ADMIN_NOMBRE, p, "yo")))
+        barra = tk.Frame(principal, bg=PANEL)
+        barra.pack(fill="x", padx=14, pady=(12, 6))
         self._boton(barra, "📷 Ver pantalla", self._click_pantalla)
         self.btn_vivo = self._boton(barra, "📡 En vivo: OFF", self._toggle_pantalla_vivo)
         self._boton(barra, "📎 Subir", self._click_subir)
@@ -228,25 +241,25 @@ class LaraGUI:
         self._boton(barra, "⚙️ Config", self._abrir_config)
 
         # Entrada
-        entrada = tk.Frame(principal, bg=PANEL, highlightthickness=1, highlightbackground=BORDE)
-        entrada.pack(fill="x", pady=(4, 0))
-        self.txt = tk.Entry(entrada, font=FUENTE, bg=PANEL, fg=TEXTO, insertbackground=ACENTO,
+        entrada = tk.Frame(principal, bg=ELEVADO, highlightthickness=1, highlightbackground=ACENTO_2)
+        entrada.pack(fill="x", padx=18, pady=(2, 0))
+        self.txt = tk.Entry(entrada, font=("Segoe UI", 11), bg=ELEVADO, fg=TEXTO, insertbackground=ACENTO,
                             relief="flat", highlightthickness=0)
-        self.txt.pack(side="left", fill="x", expand=True, ipady=8, padx=10)
+        self.txt.pack(side="left", fill="x", expand=True, ipady=10, padx=14)
         self.txt.bind("<Return>", lambda e: self._enviar_texto())
         self.txt.focus_set()
-        b = tk.Button(entrada, text="➤", command=self._enviar_texto, font=FUENTE_B, bg=PANEL, fg=ACENTO,
-                      activebackground=ACENTO, activeforeground=PANEL, relief="flat", padx=14,
+        b = tk.Button(entrada, text="Enviar  ➜", command=self._enviar_texto, font=FUENTE_B, bg=ACENTO, fg=TEXTO_ACENTO,
+                      activebackground=NARANJA, activeforeground=TEXTO_ACENTO, relief="flat", padx=16, pady=7,
                       cursor="hand2", bd=0)
-        b.pack(side="right")
+        b.pack(side="right", padx=6, pady=5)
 
         # Fila discreta de esfuerzo (como Claude Desktop): selector a la derecha
         self._construir_fila_esfuerzo(principal)
 
     def _construir_fila_esfuerzo(self, parent):
         """Selector de nivel de esfuerzo + modelo activo, debajo de la entrada."""
-        fila = tk.Frame(parent, bg=FONDO)
-        fila.pack(fill="x", pady=(4, 0))
+        fila = tk.Frame(parent, bg=PANEL)
+        fila.pack(fill="x", padx=14, pady=(6, 10))
         try:
             niveles = list(getattr(_llm, "NIVELES_ESFUERZO", None) or _NIVELES_DEF)
         except Exception:
@@ -258,29 +271,29 @@ class LaraGUI:
         if inicial not in niveles:
             inicial = niveles[0]
         self.lbl_modelo = tk.Label(fila, text=self._modelo_activo(), font=FUENTE_I,
-                                   fg=SUAVE, bg=FONDO)
+                                   fg=SUAVE, bg=PANEL)
         self.lbl_modelo.pack(side="right", padx=(0, 6))
         self.var_esfuerzo = tk.StringVar(value=inicial)
         om = tk.OptionMenu(fila, self.var_esfuerzo, *niveles, command=self._cambiar_esfuerzo)
-        om.config(bg=FONDO, fg=ACENTO, font=FUENTE, relief="flat", bd=0,
+        om.config(bg=PANEL, fg=ACENTO, font=FUENTE, relief="flat", bd=0,
                   highlightthickness=1, highlightbackground=BORDE,
                   activebackground=ACENTO, activeforeground=PANEL, cursor="hand2")
         om["menu"].config(bg=PANEL, fg=TEXTO, font=FUENTE,
                           activebackground=ACENTO, activeforeground=PANEL)
         om.pack(side="right", padx=4)
-        tk.Label(fila, text="Esfuerzo", font=FUENTE, fg=SUAVE, bg=FONDO).pack(side="right", padx=(0, 2))
+        tk.Label(fila, text="Esfuerzo", font=FUENTE, fg=SUAVE, bg=PANEL).pack(side="right", padx=(0, 2))
 
         # Selector de MODO (auto / manual / plan / lectura), estilo Claude Code.
         from core import modos as _modos
         self.var_modo = tk.StringVar(value=_modos.get_modo())
         om_modo = tk.OptionMenu(fila, self.var_modo, *_modos.NIVELES, command=self._cambiar_modo)
-        om_modo.config(bg=FONDO, fg=ACENTO, font=FUENTE, relief="flat", bd=0,
+        om_modo.config(bg=PANEL, fg=ACENTO, font=FUENTE, relief="flat", bd=0,
                        highlightthickness=1, highlightbackground=BORDE,
                        activebackground=ACENTO, activeforeground=PANEL, cursor="hand2")
         om_modo["menu"].config(bg=PANEL, fg=TEXTO, font=FUENTE,
                                activebackground=ACENTO, activeforeground=PANEL)
         om_modo.pack(side="left", padx=4)
-        tk.Label(fila, text="Modo", font=FUENTE, fg=SUAVE, bg=FONDO).pack(side="left", padx=(0, 2))
+        tk.Label(fila, text="Modo", font=FUENTE, fg=SUAVE, bg=PANEL).pack(side="left", padx=(0, 2))
 
     def _cambiar_modo(self, modo):
         from core import modos as _modos
@@ -318,9 +331,10 @@ class LaraGUI:
             pass
 
     def _boton(self, parent, texto, cmd, ancho=False):
-        b = tk.Button(parent, text=texto, command=cmd, font=FUENTE_B, bg=FONDO, fg=ACENTO,
-                      activebackground=ACENTO, activeforeground=PANEL, relief="flat",
-                      padx=10, pady=6, cursor="hand2", bd=0, anchor="w" if ancho else "center")
+        fondo = parent.cget("bg")
+        b = tk.Button(parent, text=texto, command=cmd, font=FUENTE_B, bg=fondo, fg=ACENTO,
+                      activebackground=ACENTO_2, activeforeground=TEXTO, relief="flat",
+                      padx=11, pady=7, cursor="hand2", bd=0, anchor="w" if ancho else "center")
         if ancho:
             b.pack(fill="x", padx=8, pady=4)
         else:
@@ -335,7 +349,12 @@ class LaraGUI:
         self.chat.config(state="normal")
         if quien:
             self.chat.insert("end", f"{quien}  ", tag)
-        self.chat.insert("end", f"{texto}\n\n", "cuerpo" if tag != "sys" else "sys")
+        if tag == "lara":
+            self.chat.insert("end", f"{texto}\n\n", "burbuja_lara")
+        elif tag == "yo":
+            self.chat.insert("end", f"{texto}\n\n", "burbuja_yo")
+        else:
+            self.chat.insert("end", f"{texto}\n\n", "cuerpo" if tag != "sys" else "sys")
         self.chat.config(state="disabled")
         self.chat.see("end")
 
@@ -359,14 +378,24 @@ class LaraGUI:
             set_voz_alertas(lambda m: skills_voz.hablar(m))
         except Exception:
             pass
-        try:
-            auto_registrar_skills_core()
-        except Exception:
-            pass
+        # Fase 1: el registro dinámico de scripts queda pausado por seguridad.
         # Indexar tus documentos (RAG) en segundo plano, sin bloquear la ventana.
         try:
             from core import rag_documentos
             rag_documentos.indexar_todo_async()
+        except Exception:
+            pass
+        # Precargar Whisper LOCAL (STT): sin esto, la PRIMERA frase que dices
+        # paga la carga del modelo (varios segundos) — main.py ya lo hacía pero
+        # la GUI no, y es la vía que más usas. También Kokoro si es el motor
+        # de voz elegido.
+        try:
+            from core import stt_local
+            threading.Thread(target=stt_local.precargar, daemon=True).start()
+            skills_voz.precargar_tts()
+            # Sembrar la huella de la PROPIA voz de LARA (anti-eco acústico /
+            # dúplex sin palabra clave). Solo trabaja la primera vez.
+            threading.Thread(target=skills_voz.sembrar_voz_lara, daemon=True).start()
         except Exception:
             pass
 
@@ -548,8 +577,11 @@ class LaraGUI:
             if self.tab_code is not None:
                 self.tab_code.pack_forget()
             self.tab_chat.pack(fill="both", expand=True)
-        # VERDE solo aquí: pestaña activa fondo verde/texto blanco, inactiva texto verde
-        activo, inactivo = {"bg": VERDE, "fg": "#FFFFFF"}, {"bg": FONDO, "fg": VERDE}
+        # Estado de pestaña consistente con el nuevo sistema de tarjetas.
+        activo = {"bg": ACENTO, "fg": TEXTO_ACENTO,
+                  "activebackground": ACENTO, "activeforeground": TEXTO_ACENTO}
+        inactivo = {"bg": ELEVADO, "fg": SUAVE,
+                    "activebackground": ACENTO_2, "activeforeground": TEXTO}
         self.btn_tab_chat.config(**(activo if nombre == "chat" else inactivo))
         self.btn_tab_code.config(**(activo if nombre == "code" else inactivo))
 
@@ -622,7 +654,7 @@ class LaraGUI:
                 # ~12 s y el bucle RE-COMPRUEBA si hay que parar (botón 👂 off) y
                 # vuelve a escuchar. Al terminar cada frase suelta el mic, así el
                 # botón 🎤 puede intercalarse.
-                crudo, sr, voz_dur, t_voz = grabar_vad(
+                crudo, sr, voz_dur, t_voz, texto_previo = grabar_vad(
                     espera_inicio=12.0, fin_silencio=fin_sil, max_frase=maxf)
             except Exception:
                 continue
@@ -630,7 +662,8 @@ class LaraGUI:
                 break
             try:
                 self._cola_voz.put_nowait(
-                    {"crudo": crudo, "sr": sr, "voz_dur": voz_dur, "t_voz": t_voz})
+                    {"crudo": crudo, "sr": sr, "voz_dur": voz_dur, "t_voz": t_voz,
+                     "texto_previo": texto_previo})
             except queue.Full:
                 pass  # transcripción muy atrasada: descartamos la más vieja implícitamente
 
@@ -650,8 +683,34 @@ class LaraGUI:
             # ni salir "de la nada" (era el efecto raro en modo reunión).
             if time.time() - t0 > 8.0:
                 continue
+            # RESCATE tras la voz de LARA: si la toma empezó captando SU voz
+            # por los parlantes y tú contestaste apenas terminó (misma toma),
+            # recorta su parte y procesa SOLO la tuya. Antes esa toma mixta se
+            # descartaba entera salvo que dijeras "Lara" — era el "le hablo al
+            # instante después de ella y no me escucha".
+            try:
+                rec = skills_voz.recortar_voz_de_lara(
+                    cap["crudo"], cap["sr"], cap["t_voz"])
+                if rec is not None:
+                    resto, t2, vd2, previo = rec
+                    # Verificación acústica antes de recortar: si el tramo
+                    # previo NO es la voz de LARA (eras TÚ hablando encima),
+                    # recortar destrozaría el inicio de tu frase -> no tocar.
+                    aplicar = True
+                    try:
+                        if voz_id.voz_lara_lista() and not voz_id.es_voz_de_lara(previo, cap["sr"]):
+                            aplicar = False
+                    except Exception:
+                        pass
+                    if aplicar:
+                        cap = dict(cap)
+                        cap["crudo"], cap["t_voz"], cap["voz_dur"] = resto, t2, vd2
+                        cap["texto_previo"] = None  # el texto de la compuerta traía la voz de ella
+            except Exception:
+                pass
             res = skills_voz.transcribir_crudo(
-                cap["crudo"], cap["sr"], cap["voz_dur"], cap["t_voz"])
+                cap["crudo"], cap["sr"], cap["voz_dur"], cap["t_voz"],
+                cap.get("texto_previo"))
             if "texto" not in res or not res["texto"]:
                 continue
             texto = res["texto"]
@@ -667,9 +726,28 @@ class LaraGUI:
 
             # ANTI-ECO: ¿LARA estaba hablando mientras se grababa esta frase?
             # (su voz sale por los parlantes y el micrófono la vuelve a captar)
-            solapa = skills_voz.hablo_desde(res.get("t_voz", t0) - 0.7)
-            if solapa and skills_voz.es_eco(texto):
+            # Dos ventanas DISTINTAS a propósito:
+            #  - eco_posible (margen -0.7 s): solo decide si vale la pena
+            #    comparar el TEXTO contra lo que ella dijo (es_eco). Barato y
+            #    sin falsos positivos: si tus palabras son otras, pasa.
+            #  - solapa (margen +0.15 s): ella SEGUÍA hablando cuando tu voz
+            #    empezó -> ahí sí aplica el barge-in estricto (exigir "Lara").
+            #    Antes solapa usaba el margen de -0.7 s: hablarle en el
+            #    ~medio segundo siguiente a su última palabra caía al filtro
+            #    estricto y, sin "Lara", se IGNORABA — tenías que repetir.
+            t_voz_res = res.get("t_voz", t0)
+            eco_posible = skills_voz.hablo_desde(t_voz_res - 0.7)
+            if eco_posible and skills_voz.es_eco(texto):
+                # Eco confirmado por TEXTO: además de ignorarlo, se aprovecha
+                # como muestra REAL de cómo suena la voz de LARA por TUS
+                # parlantes (refina el anti-eco ACÚSTICO sin hacer nada).
+                try:
+                    if audio is not None:
+                        voz_id.aprender_voz_lara(audio, srr)
+                except Exception:
+                    pass
                 continue  # era su propia voz: no es una pregunta tuya
+            solapa = skills_voz.hablo_desde(t_voz_res + 0.15)
 
             # APRENDIZAJE PASIVO de voz (sin botón): si dijiste "aprende mi voz",
             # cada frase que hables se enrola sola hasta completar el perfil. No
@@ -736,6 +814,11 @@ class LaraGUI:
                     self.cerebro.modo_dictado = False
                     self.imprimir("", "✍️ Dictado terminado.", "sys")
                     skills_voz.hablar("Dictado terminado.")
+                elif modos.bloqueada("escribir_en", ["dictado"]):
+                    # El modo cambió a plan/lectura (o se pausó la herramienta)
+                    # después de autorizar el dictado: no seguir tecleando.
+                    self.cerebro.modo_dictado = False
+                    self.imprimir("", "✍️ Dictado detenido: el modo actual no permite escribir.", "sys")
                 else:
                     if self.cerebro.dictado_destino:
                         _enfocar(self.cerebro.dictado_destino)  # llevar foco al programa destino
@@ -754,24 +837,65 @@ class LaraGUI:
                 self.root.after(0, lambda: self.btn_voz.config(text="🔊 Voz: ON"))
 
             # BARGE-IN: hablaste MIENTRAS LARA hablaba y NO era su propio eco (el
-            # eco puro ya se descartó arriba). Corta su voz al instante y atiende
-            # lo que dijiste, SIN exigir que digas "Lara". Frases muy cortas
-            # (1-2 caracteres, ruido suelto) no interrumpen.
+            # eco puro por texto ya se descartó arriba). Corta su voz al instante
+            # y atiende lo que dijiste -- pero SOLO si dijiste "Lara": es_eco()
+            # compara contra el texto LITERAL que ella dijo, y sin auriculares el
+            # STT suele transcribir su propia voz saliendo por los parlantes de
+            # forma distinta (reverbero, compresión), así que a veces no la
+            # reconoce como eco. Exigir la palabra de activación aquí es la
+            # segunda red de seguridad: sin ella, ese eco mal transcrito se
+            # ejecutaba como si fuera una orden tuya real. Frases muy cortas
+            # (1-2 caracteres, ruido suelto) tampoco interrumpen.
             if solapa:
                 if len(texto.strip()) < 3:
                     continue
+                # DÚPLEX ACÚSTICO (estilo Gemini Live): en vez de exigir la
+                # palabra "Lara" para todo lo que suene encima de su voz, se
+                # decide por DE QUIÉN es la voz (huella de voz_id):
+                #   - es la voz de la PROPIA LARA -> eco por parlantes: ignorar.
+                #   - es una PERSONA reconocida -> interrupción real: atender
+                #     al instante, sin palabra clave.
+                #   - voz dudosa (mezcla, lejos del micrófono, perfil sin
+                #     entrenar) -> red de seguridad clásica: se exige "Lara"
+                #     para no ejecutar un eco mal transcrito como una orden.
+                es_lara = hablante == voz_id.NOMBRE_LARA
+                if not es_lara and audio is not None:
+                    try:
+                        es_lara = voz_id.es_voz_de_lara(audio, srr)
+                    except Exception:
+                        es_lara = False
+                if hablante and not es_lara:
+                    # Persona RECONOCIDA hablando encima: interrupción real.
+                    # Dúplex completo, sin palabra clave (di "aprende mi voz"
+                    # una vez para entrar en este carril).
+                    comando = self._quitar_wake(texto)
+                else:
+                    # Eco acústico de LARA, o voz dudosa (mezcla/persona sin
+                    # perfil): exigir "Lara" explícito — quien la llama por su
+                    # nombre pasa aunque su voz se parezca a la de ella.
+                    comando = self._quitar_wake_estricto(texto)
+                    if comando is None:
+                        # Sin "Lara"... pero si el perfil de eco ya MADURÓ
+                        # (aprendió cómo suena ella por TUS parlantes) y esta
+                        # voz NO es la suya, es una persona: atender igual.
+                        if es_lara or not voz_id.voz_lara_madura():
+                            continue
+                        comando = self._quitar_wake(texto)
                 skills_voz.detener_voz()
                 if self._panel is not None:
                     try:
                         self._panel._cancelar_pendientes()
                     except Exception:
                         pass
-                comando = self._quitar_wake(texto)
                 if comando:
                     self._responder_voz(comando, hablante)
                 continue
 
-            # En reposo: procesa (quitando un "LARA" inicial si lo hay)
+            # En reposo: procesa (quitando un "LARA" inicial si lo hay). Si la
+            # huella dijo "LARA" pero ella NO estaba sonando, es un falso
+            # positivo (el eco físico no existe sin su voz): tratar como anónimo.
+            if hablante == voz_id.NOMBRE_LARA:
+                hablante = None
             comando = self._quitar_wake(texto)
             if comando:
                 self._responder_voz(comando, hablante)
@@ -793,6 +917,32 @@ class LaraGUI:
             if bajo.startswith(w):
                 return t[len(w):].strip(" ,")
         return t
+
+    @staticmethod
+    def _quitar_wake_estricto(texto: str):
+        """Como _quitar_wake, pero devuelve None si NO detecta la palabra de
+        activación, en vez de asumir que toda la frase es una orden. Úsalo
+        cuando el texto se captó SOLAPADO con la voz de LARA (barge-in): el
+        filtro de eco por texto (es_eco) compara contra lo que ella dijo
+        LITERALMENTE, pero el STT suele transcribir su propia voz saliendo
+        por los parlantes de forma distinta (sin auriculares hay reverbero,
+        compresión del parlante...) y entonces es_eco() no la reconoce. Sin
+        exigir "Lara" aquí, ese eco mal transcrito se ejecutaba como si
+        fuera una orden tuya real -- cortando a LARA a mitad de frase para
+        "responder" su propio eco."""
+        try:
+            from core import wake_word
+            activo, orden = wake_word._extraer_orden(texto)
+            if activo:
+                return orden.strip()
+        except Exception:
+            pass
+        t = texto.strip()
+        bajo = t.lower()
+        for w in ("lara,", "lara ", "lara"):
+            if bajo.startswith(w):
+                return t[len(w):].strip(" ,")
+        return None
 
     def _responder_voz(self, texto, hablante=None):
         # Encola: no bloquea la escucha (puedes seguir hablando / interrumpir).

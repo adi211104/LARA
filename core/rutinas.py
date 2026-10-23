@@ -196,9 +196,29 @@ def detectar_rutina(prompt: str):
     return None
 
 
-def _ejecutar_paso(paso: dict) -> str:
-    """Ejecuta un paso y devuelve la frase que LARA debería decir (o "")."""
+def _accion_de_paso(paso: dict):
+    """Traduce un paso con efecto a (accion, params) del gate de modos, o None
+    si el paso solo habla o consulta."""
     tipo = paso.get("tipo", "")
+    if tipo == "brillo":
+        return "ajustar_brillo", [str(paso.get("nivel", 50))]
+    if tipo == "sistema":
+        return "sistema", [paso.get("op", ""), paso.get("valor", "")]
+    if tipo == "abrir":
+        return "abrir", [paso.get("programa", "")]
+    return None
+
+
+def _ejecutar_paso(paso: dict, autorizar=None) -> str:
+    """Ejecuta un paso y devuelve la frase que LARA debería decir (o "").
+
+    Los pasos con efecto solo se ejecutan si 'autorizar(accion, params)'
+    devuelve True. Sin callback se deniegan: una rutina nunca se salta la
+    política de modos (A-01)."""
+    tipo = paso.get("tipo", "")
+    accion = _accion_de_paso(paso)
+    if accion and not (autorizar and autorizar(*accion)):
+        return ""
     try:
         if tipo == "hablar":
             return paso.get("texto", "")
@@ -231,7 +251,7 @@ def _ejecutar_paso(paso: dict) -> str:
     return ""
 
 
-def ejecutar_rutina(nombre: str, on_speak=None, imprimir=None) -> str:
+def ejecutar_rutina(nombre: str, on_speak=None, imprimir=None, autorizar=None) -> str:
     """
     Ejecuta la rutina 'nombre' paso a paso. Habla cada frase (on_speak) y/o la
     muestra (imprimir). Devuelve el texto completo (para el historial/GUI).
@@ -242,7 +262,7 @@ def ejecutar_rutina(nombre: str, on_speak=None, imprimir=None) -> str:
         return ""
     dichas = []
     for paso in r.get("pasos", []):
-        frase = _ejecutar_paso(paso)
+        frase = _ejecutar_paso(paso, autorizar)
         if frase and frase.strip():
             dichas.append(frase.strip())
             if imprimir:

@@ -1,19 +1,24 @@
 @echo off
 REM ============================================================
 REM  Lanzador de LARA — interfaz grafica con voz y vision.
-REM  Funciona en cualquier PC Windows de Adi: la primera vez
-REM  instala las dependencias que falten y luego abre la GUI.
+REM  Ya NO instala paquetes en cada arranque (auditoria A-04):
+REM  la instalacion se hace una vez con INSTALAR_LARA.bat, que
+REM  crea el entorno .venv con versiones fijadas.
 REM ============================================================
 title LARA - Asistente del Taller
 cd /d "%~dp0"
 
+set "PYTHON_LARA=.venv\Scripts\python.exe"
+if not exist "%PYTHON_LARA%" (
+    echo [AVISO] No existe el entorno .venv. Ejecuta INSTALAR_LARA.bat para una
+    echo         instalacion reproducible. Por ahora uso el Python del sistema.
+    set "PYTHON_LARA=python"
+)
+
 echo Iniciando LARA...
-
-REM Asegurar pip
-python -m pip --version >nul 2>&1 || python -m ensurepip --upgrade
-
-REM Instalar dependencias que falten (rapido si ya estan)
-python -m pip install --quiet -r requirements.txt
+if exist ".tools\gateway-lara.json" (
+    "%PYTHON_LARA%" tools\gateway_lara.py iniciar
+)
 
 REM ---- Cerebro HIBRIDO local + nube ------------------------------------
 REM Lo simple ("abre chrome", "que hora es") lo resuelve el modelo LOCAL de
@@ -24,12 +29,10 @@ REM     ollama pull qwen2.5:3b-instruct    (decisiones simples)
 REM     ollama pull embeddinggemma         (memoria semantica local)
 REM Si Ollama no corre, LARA usa solo la nube (no pasa nada). Pon 0 para
 REM apagar el cerebro local a proposito.
-set LARA_LLM_LOCAL=1
-set LARA_OLLAMA_MODEL=qwen2.5:3b-instruct
-set LARA_OLLAMA_EMBED=embeddinggemma
+REM Los valores por defecto viven en Python; respetar .env y preferencias del usuario.
 
 REM Abrir la interfaz grafica
-python gui.py
+"%PYTHON_LARA%" gui.py
 
 if errorlevel 1 (
     echo.

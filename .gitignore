@@ -36,3 +36,7 @@ desktop.ini
 .DS_Store
 .vscode/
 .idea/
+
+# Servicios auxiliares, datasets exportados y candidatos locales
+.tools/
+salidas_aprendizaje/

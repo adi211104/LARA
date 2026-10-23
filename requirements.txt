@@ -13,7 +13,12 @@ SpeechRecognition
 sounddevice
 numpy
 miniaudio          # decodifica el mp3 de la voz para elegir dispositivo de salida
-pyttsx3            # respaldo offline de voz
+pyttsx3            # respaldo offline de voz (último recurso, suena robótico)
+kokoro-onnx        # respaldo offline REAL (voz neuronal, CPU). Opcional: si falta o
+                    # no tiene los pesos descargados, LARA sigue igual que antes.
+                    # Pesos (~350 MB, NO en pip): ver modelos_voz/kokoro/LEEME.txt
+espeakng-loader    # fonemizador para el español de Kokoro (sin instalar nada del sistema)
+phonemizer-fork
 faster-whisper     # STT LOCAL (offline, menos latencia). Si falta, usa Whisper en la nube (Groq)
 openwakeword       # Wake word LOCAL instantáneo ("hey jarvis"). Si falta, usa el wake word por transcripción
 

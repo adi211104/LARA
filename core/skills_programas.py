@@ -85,15 +85,13 @@ _APPS_URI = {
 
 def _lanzar_uri(uri: str) -> bool:
     """Abre un URI de protocolo de Windows (ej. microsoft.windows.camera:)."""
+    # Sin respaldo vía 'start' con shell=True (A-02): si startfile no puede,
+    # cmd.exe tampoco aportaría nada salvo riesgo de inyección.
     try:
         os.startfile(uri)
         return True
     except Exception:
-        try:
-            subprocess.Popen(f'start "" "{uri}"', shell=True)
-            return True
-        except Exception:
-            return False
+        return False
 
 
 def _sin_tildes(t: str) -> str:
@@ -246,6 +244,176 @@ def _lanzar(info: dict) -> dict:
         return {"error": str(e), "nombre": nombre}
 
 
+# ──────────────────────────────────────────────
+#  Cierre INTELIGENTE de programas (contraparte de abrir_programa_inteligente)
+# ──────────────────────────────────────────────
+# Antes NO existía ninguna skill dedicada a cerrar programas: el router caía a
+# "cmd" y el modelo tenía que ADIVINAR el nombre exacto del .exe (ej.
+# "WhatsApp.exe"), que muchas veces no coincide con el proceso real -> taskkill
+# fallaba y LARA decía "no pude" o inventaba una excusa. Esto busca en los
+# procesos REALMENTE EN EJECUCIÓN (no en el índice de apps instalables) y hace
+# coincidencia difusa igual que abrir_programa_inteligente, así no depende de
+# que el modelo acierte el nombre interno del ejecutable.
+
+_RELLENO_CERRAR = {"cierra", "ciérrame", "cierrame", "cerrar", "termina", "terminar",
+                    "finaliza", "finalizar", "mata", "matar", "sal", "salir",
+                    "el", "la", "los", "las", "mi", "mis", "un", "una", "de",
+                    "proceso", "procesos", "programa", "app", "aplicacion",
+                    "aplicación", "por", "favor", "porfavor", "porfa"}
+
+# Procesos que NUNCA se cierran por coincidencia difusa, aunque el usuario lo
+# pida: son del sistema operativo y matarlos puede colgar o cerrar la sesión
+# de Windows (explorer.exe incluido -- para eso ya existe modo_nocturno, que
+# lo hace a propósito y no por una coincidencia aproximada de voz).
+_PROCESOS_PROTEGIDOS = {
+    "system", "system idle process", "registry", "csrss", "wininit", "winlogon",
+    "services", "lsass", "smss", "dwm", "svchost", "explorer", "audiodg",
+}
+
+
+def _procesos_en_ejecucion() -> list:
+    """[{'pid','nombre','titulo'}] de los procesos activos (PowerShell Get-Process)."""
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+             "Get-Process | Select-Object Id,ProcessName,MainWindowTitle | ConvertTo-Json -Compress"],
+            capture_output=True, text=True, encoding="utf-8", timeout=15,
+        )
+        data = json.loads(r.stdout.strip() or "[]")
+        if isinstance(data, dict):
+            data = [data]
+        return [{"pid": d.get("Id"), "nombre": d.get("ProcessName", ""),
+                 "titulo": d.get("MainWindowTitle", "") or ""} for d in data if d.get("ProcessName")]
+    except Exception:
+        return []
+
+
+def _terminos_busqueda_cierre(consulta: str) -> list:
+    base = _norm(consulta)
+    palabras = [p for p in base.split() if p not in _RELLENO_CERRAR]
+    limpio = " ".join(palabras) or base
+    return [limpio] if limpio else []
+
+
+def buscar_proceso(consulta: str, max_resultados: int = 5) -> list:
+    """Devuelve procesos en ejecución que coinciden con la consulta, ordenados
+    por score: [{'nombre','pids','titulo','score'}]. Agrupa por nombre de
+    proceso (una app con varias ventanas/subprocesos cuenta como una)."""
+    terminos = _terminos_busqueda_cierre(consulta)
+    if not terminos or not terminos[0]:
+        return []
+
+    grupos = {}  # nombre_norm -> {"nombre","pids":[],"titulo"}
+    for p in _procesos_en_ejecucion():
+        nombre = p["nombre"]
+        clave = _norm(nombre)
+        if clave in _PROCESOS_PROTEGIDOS or p["pid"] == os.getpid():
+            continue
+        g = grupos.setdefault(clave, {"nombre": nombre, "pids": [], "titulo": ""})
+        g["pids"].append(p["pid"])
+        if p["titulo"] and not g["titulo"]:
+            g["titulo"] = p["titulo"]
+
+    puntuados = []
+    for clave, info in grupos.items():
+        candidatos_texto = [clave]
+        if info["titulo"]:
+            candidatos_texto.append(_norm(info["titulo"]))
+        mejor = 0.0
+        for t in terminos:
+            for c in candidatos_texto:
+                if not t or not c:
+                    continue
+                if c == t:
+                    mejor = max(mejor, 1.0)
+                elif t in c or c in t:
+                    mejor = max(mejor, 0.85 + 0.1 * (len(t) / max(len(c), 1)))
+                else:
+                    ratio = SequenceMatcher(None, t, c).ratio()
+                    tokens_t, tokens_c = set(t.split()), set(c.split())
+                    solap = len(tokens_t & tokens_c) / max(len(tokens_t), 1)
+                    mejor = max(mejor, 0.6 * ratio + 0.4 * solap)
+        if mejor >= 0.55:
+            puntuados.append((mejor, info))
+
+    puntuados.sort(key=lambda x: x[0], reverse=True)
+    return [{**info, "score": round(s, 2)} for s, info in puntuados[:max_resultados]]
+
+
+def _matar_pid(pid: int) -> str:
+    """Intenta cerrar un PID sin elevar. Devuelve "" si funcionó, o el stderr
+    real de taskkill (para no inventar un motivo genérico)."""
+    try:
+        r = subprocess.run(["taskkill", "/PID", str(pid), "/F"],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            return ""
+        return (r.stderr or r.stdout or "taskkill falló sin detalle").strip()
+    except Exception as e:
+        return str(e)
+
+
+def _matar_pid_admin(pid: int) -> bool:
+    """
+    Cierra un PID CON elevación (dispara el prompt de UAC de Windows -- el
+    usuario debe aprobarlo). Usa Start-Process -Verb RunAs -Wait -PassThru
+    para poder leer el código de salida real de taskkill (a diferencia de
+    ejecutar_cmd_admin, que solo abre una ventana visible sin forma de saber
+    si el comando de adentro tuvo éxito).
+    """
+    try:
+        ps = (f"$p = Start-Process taskkill -ArgumentList '/PID {pid} /F' "
+              f"-Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode")
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                           capture_output=True, text=True, timeout=30)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def cerrar_programa_inteligente(consulta: str, admin: bool = False) -> dict:
+    """
+    Busca entre los procesos REALMENTE en ejecución el que mejor coincide con
+    lo que pidió el usuario y lo cierra (todos sus PID, por si tiene varias
+    ventanas/subprocesos). Si no hay coincidencia clara, devuelve un error
+    honesto en vez de una excusa genérica.
+
+    'admin=True' cierra CON permisos elevados (dispara UAC): úsalo solo
+    cuando el usuario lo pida explícitamente tras un primer intento fallido
+    (un proceso corriendo elevado -- ej. Task Manager "como administrador" --
+    no se puede cerrar sin elevarse también).
+    """
+    candidatos = buscar_proceso(consulta)
+    if not candidatos:
+        return {"error": f"No encontré ningún proceso en ejecución que coincida con '{consulta}'."}
+
+    mejor = candidatos[0]
+    cerrados = 0
+    ultimo_motivo = ""
+    for pid in mejor["pids"]:
+        motivo = _matar_pid(pid)
+        if not motivo:
+            cerrados += 1
+            continue
+        if admin and _matar_pid_admin(pid):
+            cerrados += 1
+            continue
+        ultimo_motivo = motivo
+
+    if cerrados == 0:
+        sugerencia = "" if admin else " Puedo reintentar con permisos de administrador si me lo pides."
+        return {"error": f"Encontré '{mejor['nombre']}' pero no pude cerrarlo "
+                          f"({ultimo_motivo}).{sugerencia}",
+                "nombre": mejor["nombre"], "necesita_admin": not admin}
+
+    resultado = {"estado": "ok", "nombre": mejor["nombre"], "cerrados": cerrados}
+    alternativas = [c["nombre"] for c in candidatos[1:4] if c["nombre"] != mejor["nombre"]]
+    if alternativas:
+        resultado["alternativas"] = alternativas
+    return resultado
+
+
 def abrir_programa_inteligente(consulta: str) -> dict:
     """
     Busca el programa que mejor coincide con lo que pidió el usuario y lo abre.
@@ -262,9 +430,14 @@ def abrir_programa_inteligente(consulta: str) -> dict:
 
     candidatos = buscar_programa(consulta)
     if not candidatos:
-        # Último recurso: intentar el comando 'start' literal de Windows
+        # Último recurso: abrir el nombre literal (App Paths / PATH de Windows)
+        # con os.startfile, que no interpreta metacaracteres como '&' o '|'.
+        literal = (consulta or "").strip()
+        if not literal or any(c in '"^&|<>%`' or ord(c) < 32 for c in literal):
+            return {"error": f"No encontré ningún programa que coincida con '{consulta}'.",
+                    "sugerencias": []}
         try:
-            subprocess.Popen(f'start "" "{consulta}"', shell=True)
+            os.startfile(literal)
             return {"estado": "ok", "nombre": consulta, "tipo": "literal",
                     "nota": "No estaba en el índice; intenté abrirlo directamente."}
         except Exception:

@@ -1,0 +1,83 @@
+[
+  {
+    "caso": "ayuda",
+    "pregunta": "ayuda",
+    "respuesta": "Estas son algunas cosas que puedes pedirme:\n• mis tareas / nueva tarea revisar el amplificador / completar tarea 3\n• mis recordatorios / cancelar recordatorio 2\n• temporizador 10 minutos / pomodoro (25 minutos)\n• recuérdame revisar el horno en 15 minutos\n• anota comprar resistencias\n• qué hora es / batería / info del sistema\n• abre calculadora / abre descargas\n• diagnóstico / estado de documentos\n• mis motores (configuración local y disponibilidad de claves)\n• sé breve / respuestas largas / repite / silencio\nLas tareas, temporizadores y recordatorios de esta lista funcionan sin IA.\nLos recordatorios vencidos se recuperan al abrir LARA; el programa debe estar abierto para avisar a tiempo.\nVisión, investigación y conversación avanzada dependen de los motores configurados.",
+    "segundos": 0.057,
+    "arranque_s": 3.609,
+    "motor": "",
+    "estados": [],
+    "evidencia": null
+  },
+  {
+    "caso": "tareas",
+    "pregunta": "nueva tarea revisar el amplificador",
+    "respuesta": "Tarea #1 guardada: revisar el amplificador",
+    "segundos": 0.057,
+    "arranque_s": 3.693,
+    "motor": "",
+    "estados": [],
+    "evidencia": {
+      "tareas": [
+        {
+          "id": 1,
+          "titulo": "revisar el amplificador",
+          "fecha_limite": "",
+          "prioridad": "media",
+          "proyecto": "",
+          "estado": "pendiente",
+          "creada": "2026-10-15T00:02"
+        }
+      ]
+    }
+  },
+  {
+    "caso": "calculo",
+    "pregunta": "Calcula la resistencia para un LED de 2 V y 20 mA conectado a 12 V. Indica resistencia y potencia disipada. No ejecutes herramientas.",
+    "respuesta": "Para alimentar un LED de 2 V y 20 mA desde una fuente de 12 V, la caída de tensión en la resistencia será 12 V − 2 V = 10 V. La resistencia necesaria es R = V/I = 10 V / 0.02 A = 500 Ω. La potencia disipada en la resistencia es P = V·I = 10 V × 0.02 A = 0.20 W, por lo que se recomienda usar una resistencia de al menos 0.5 W de potencia nominal para margen de seguridad.",
+    "segundos": 3.529,
+    "arranque_s": 3.577,
+    "motor": "☁ openai/gpt-oss-120b",
+    "estados": [
+      [
+        3.619,
+        "LARA pensando..."
+      ]
+    ],
+    "evidencia": null
+  },
+  {
+    "caso": "logica",
+    "pregunta": "Tengo 3 cajas: una dice manzanas, otra naranjas, otra mezcla. Todas las etiquetas son incorrectas. ¿De qué caja saco una fruta para identificar las tres y por qué? Responde sin herramientas.",
+    "respuesta": "CAJAS Y ETIQUETAS\nClaro, para resolver este enigma visualmente, imagina que tienes estas tres cajas frente a ti.",
+    "segundos": 17.045,
+    "arranque_s": 3.533,
+    "motor": "☁ openai/gpt-oss-120b",
+    "estados": [
+      [
+        3.574,
+        "LARA pensando..."
+      ],
+      [
+        7.25,
+        "Preparando explicación de cajas con manzanas, naranjas y mezcla, etiquetas incorrectas..."
+      ]
+    ],
+    "evidencia": null
+  },
+  {
+    "caso": "codigo",
+    "pregunta": "Escribe una función Python que calcule la mediana de una lista sin modificarla, acepte números negativos y lance ValueError si está vacía. Incluye tres pruebas. Solo muestra código, no lo ejecutes.",
+    "respuesta": "def mediana(lista):\n    if not lista:\n        raise ValueError('La lista está vacía')\n    # No modificar la lista original\n    ordenada = sorted(lista)\n    n = len(ordenada)\n    mitad = n // 2\n    if n % 2 == 1:\n        return ordenada[mitad]\n    else:\n        return (ordenada[mitad - 1] + ordenada[mitad]) / 2\n\n# Pruebas\nassert mediana([3, 1, 2]) == 2\nassert mediana([5, 3, 1, 4]) == 3.5\nassert mediana([-2, -1, -3, -4]) == -2.5",
+    "segundos": 4.022,
+    "arranque_s": 3.525,
+    "motor": "☁ openai/gpt-oss-120b",
+    "estados": [
+      [
+        3.565,
+        "LARA pensando..."
+      ]
+    ],
+    "evidencia": null
+  }
+]

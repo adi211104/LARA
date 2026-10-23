@@ -31,7 +31,7 @@ load_dotenv()
 
 _MODELO = "gemini-2.5-flash"
 _client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"),
-                       http_options=types.HttpOptions(timeout=90000))
+                       http_options=types.HttpOptions(timeout=90000)) if os.getenv("GEMINI_API_KEY") else None
 
 # ── Vocabulario permitido (el renderer solo entiende esto) ─────────────────
 _TIPOS = {"titulo", "texto", "caja", "circulo", "linea", "flecha",

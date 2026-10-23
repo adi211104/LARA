@@ -440,6 +440,97 @@ def identificar(crudo: bytes, sr: int = 16000):
     return (mejor_nombre, mejor)
 
 
+# ── Huella de la PROPIA voz de LARA (anti-eco acústico) ─────────────────────
+# El filtro de eco por TEXTO falla seguido sin auriculares: el STT transcribe
+# la voz de LARA saliendo por los parlantes distinto a como ella la dijo. La
+# solución de los asistentes "live" (Gemini/GPT) es ACÚSTICA, no textual:
+# saber qué voz es de quién. Aquí se enrola a la propia LARA como un hablante
+# más ("LARA"): si una captura se identifica como ella -> es su eco; si se
+# identifica como una persona -> es una interrupción real que hay que atender.
+# El perfil se siembra con su TTS al arrancar (skills_voz.sembrar_voz_lara) y
+# se REFINA solo, con los ecos reales confirmados por texto (que sí traen la
+# coloración de tus parlantes y tu habitación).
+NOMBRE_LARA = "LARA"
+
+
+def aprender_voz_lara(crudo: bytes, sr: int = 16000) -> dict:
+    """Añade una muestra al perfil de voz de la propia LARA."""
+    return enrolar(NOMBRE_LARA, crudo, sr)
+
+
+def voz_lara_lista() -> bool:
+    """True si el perfil de la propia LARA ya tiene muestras suficientes."""
+    return len(_cargar_voces().get(NOMBRE_LARA, [])) >= 3
+
+
+def voz_lara_madura() -> bool:
+    """True si el perfil de eco ya aprendió varias muestras REALES (captadas
+    del micrófono, no solo la semilla TTS): a partir de aquí, que un audio NO
+    parezca la voz de LARA es señal fiable de que es otra persona, y se puede
+    atender una interrupción sin exigir la palabra clave."""
+    return len(_cargar_voces().get(NOMBRE_LARA, [])) >= 8
+
+
+def _puntajes(hv: np.ndarray) -> tuple:
+    """
+    Puntaje de similitud del audio contra CADA perfil enrolado. Devuelve
+    (dict nombre->score, modo) donde modo es "crudo" (un solo perfil: coseno
+    directo, escala alta) o "estandarizado" (2+ perfiles: coseno blanqueado,
+    la escala donde la misma voz ronda >0.5 y las demás caen mucho).
+    Es la métrica de identificar() SIN sus vetos de decisión (umbral, margen,
+    distancia): sirve para decisiones con OTRO costo de error, como el eco.
+    """
+    voces = _cargar_voces()
+    if not voces:
+        return {}, "crudo"
+    nombres = list(voces.keys())
+    matrices = {n: np.asarray(voces[n], dtype=np.float64) for n in nombres}
+    if len(nombres) == 1:
+        n = nombres[0]
+        sims = sorted((float(np.dot(hv, fila)) for fila in matrices[n]), reverse=True)
+        return {n: float(np.mean(sims[:3]))}, "crudo"
+    centros = np.stack([matrices[n].mean(axis=0) for n in nombres])
+    mu = centros.mean(axis=0)
+    sigma = np.stack([matrices[n].std(axis=0) for n in nombres]).mean(axis=0)
+    sigma = np.maximum(sigma, 0.05 * (sigma.mean() + 1e-12))
+
+    def _z(v):
+        z = (v - mu) / sigma
+        n2 = np.linalg.norm(z)
+        return z / n2 if n2 > 0 else z
+
+    hz = _z(hv)
+    puntajes = {}
+    for nombre in nombres:
+        sims = sorted((float(np.dot(hz, _z(fila))) for fila in matrices[nombre]), reverse=True)
+        puntajes[nombre] = float(np.mean(sims[:3]))
+    return puntajes, "estandarizado"
+
+
+# Umbrales del detector de eco (calibrados con TTS real en esta PC: una frase
+# NUEVA de la voz de LARA puntúa ~0.58 estandarizado; una voz distinta ~0.38).
+# Son MÁS laxos que los de identificar(): confundir a una persona con otra es
+# grave, pero tragarse un eco de más solo cuesta ignorar una frase que era de
+# LARA — y dejar pasar un eco lo frena después la red del texto/wake word.
+_UMBRAL_ECO_ESTD = 0.50   # escala estandarizada (2+ perfiles)
+_UMBRAL_ECO_CRUDO = 0.90  # escala de coseno crudo (solo LARA enrolada)
+_MARGEN_ECO = 0.10        # LARA debe superar al mejor humano por este margen
+
+
+def es_voz_de_lara(crudo: bytes, sr: int = 16000) -> bool:
+    """True si el audio suena a la PROPIA voz de LARA (eco por parlantes)."""
+    h = huella(crudo, sr)
+    if h is None:
+        return False
+    puntajes, modo = _puntajes(np.asarray(h, dtype=np.float64))
+    if NOMBRE_LARA not in puntajes:
+        return False
+    s = puntajes[NOMBRE_LARA]
+    otros = [v for k, v in puntajes.items() if k != NOMBRE_LARA]
+    umbral = _UMBRAL_ECO_CRUDO if modo == "crudo" else _UMBRAL_ECO_ESTD
+    return s >= umbral and (not otros or s >= max(otros) + _MARGEN_ECO)
+
+
 def eliminar_persona(nombre: str) -> bool:
     """Borra el perfil de voz completo de 'nombre'. True si existía."""
     voces = _cargar_voces()
@@ -499,5 +590,6 @@ def autorizado(crudo: bytes, sr: int = 16000) -> bool:
 
 
 def personas() -> list:
-    """Nombres con perfil de voz válido (se ignoran perfiles vacíos/antiguos)."""
-    return list(_cargar_voces().keys())
+    """Nombres de PERSONAS con perfil de voz válido (se ignoran perfiles
+    vacíos/antiguos y el perfil interno de la propia LARA)."""
+    return [n for n in _cargar_voces().keys() if n != NOMBRE_LARA]

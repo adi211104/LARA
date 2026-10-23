@@ -1,0 +1,47 @@
+[
+  {
+    "caso": "calculo",
+    "pregunta": "Calcula la resistencia para un LED de 2 V y 20 mA conectado a 12 V. Indica resistencia y potencia disipada. No ejecutes herramientas.",
+    "respuesta": "Resistencia requerida  \nR = (Vs – Vf) / I = (12 V – 2 V) / 0.020 A = 10 V / 0.020 A = 500 Ω  \n\nPotencia disipada en la resistencia  \nP = V_R × I = (12 V – 2 V) × 0.020 A = 10 V × 0.020 A = 0.20 W  \n(ó P = I² × R = 0.020² × 500 = 0.20 W)\n\nRecomendación práctica  \n- Valor comercial más cercano: 470 Ω o 510 Ω.  \n  • Con 470 Ω, I ≈ 10 V / 470 Ω ≈ 21.3 mA → 0.226 W disipados.  \n  • Con 510 Ω, I ≈ 10 V / 510 Ω ≈ 19.6 mA → 0.196 W disipados.  \n- Seleccionar una resistencia con al menos el doble de la potencia calculada, es decir 0.5 W como mínimo; 1 W es la opción más segura si no quieres que el componente se ponga rojo de vergüenza.\n\nVerificación rápida  \n1. Mide la caída de tensión en el LED; debe estar cerca de 2 V.  \n2. Con la resistencia elegida, mide la corriente con un multímetro en serie; debería estar entre 19 mA y 21 mA.  \n3. Toca ligeramente la resistencia después de un minuto de funcionamiento; si está caliente, sube la potencia nominal.\n\nEn resumen: 500 Ω a 0.2 W es el cálculo teórico; usa 470 Ω o 510 Ω y escoge una resistencia de 0.5 W (preferiblemente 1 W) para que el LED no se quede sin luz y la resistencia no se derrita por falta de cariño.",
+    "segundos": 3.145,
+    "arranque_s": 3.997,
+    "motor": "☁ openai/gpt-oss-120b (profundo)",
+    "estados": [
+      [
+        3.998,
+        "Razonando sin ejecutar herramientas..."
+      ]
+    ],
+    "evidencia": null
+  },
+  {
+    "caso": "logica",
+    "pregunta": "Tengo 3 cajas: una dice manzanas, otra naranjas, otra mezcla. Todas las etiquetas son incorrectas. ¿De qué caja saco una fruta para identificar las tres y por qué? Responde sin herramientas.",
+    "respuesta": "Extrae una fruta de la caja que lleva la etiqueta “mezcla”.  \nComo ninguna etiqueta es correcta, esa caja no puede contener la mezcla; sólo puede ser de manzanas o de naranjas. La fruta que saques identifica su contenido.\n\n- Si la fruta es una manzana, esa caja es la de solo manzanas.  \n  La caja etiquetada “manzanas” no puede ser manzanas (etiqueta errónea) y tampoco puede ser la mezcla (ya está asignada), así que debe contener solo naranjas.  \n  La única caja que queda, la que dice “naranjas”, será la mixta.\n\n- Si la fruta es una naranja, el razonamiento es idéntico pero invertido: la caja “mezcla” resulta ser la de solo naranjas, la etiquetada “naranjas” pasa a ser la de solo manzanas y la que dice “manzanas” queda como la mixta.\n\nCon una sola muestra ya tienes la identificación completa de las tres cajas.  \n(Sí, el truco clásico de las etiquetas mentirosas: lógica, no magia.)",
+    "segundos": 3.393,
+    "arranque_s": 4.042,
+    "motor": "☁ openai/gpt-oss-120b (profundo)",
+    "estados": [
+      [
+        4.043,
+        "Razonando sin ejecutar herramientas..."
+      ]
+    ],
+    "evidencia": null
+  },
+  {
+    "caso": "codigo",
+    "pregunta": "Escribe una función Python que calcule la mediana de una lista sin modificarla, acepte números negativos y lance ValueError si está vacía. Incluye tres pruebas. Solo muestra código, no lo ejecutes.",
+    "respuesta": "def median(data):\n    \"\"\"Devuelve la mediana de una lista sin modificarla.\n    Lanza ValueError si la lista está vacía.\n    Acepta números negativos y cualquier tipo numérico comparable.\"\"\"\n    if not data:\n        raise ValueError(\"La lista está vacía\")\n    n = len(data)\n    sorted_data = sorted(data)\n    mid = n // 2\n    if n % 2:\n        return sorted_data[mid]\n    else:\n        return (sorted_data[mid - 1] + sorted_data[mid]) / 2\n\n# Pruebas\nassert median([3, 1, 2]) == 2\nassert median([-5, -1, -3, -2]) == -2.5\nassert median([10]) == 10",
+    "segundos": 2.935,
+    "arranque_s": 3.895,
+    "motor": "☁ openai/gpt-oss-120b (profundo)",
+    "estados": [
+      [
+        3.896,
+        "Razonando sin ejecutar herramientas..."
+      ]
+    ],
+    "evidencia": null
+  }
+]

@@ -17,8 +17,10 @@ main.py (consola) y gui.py (gráfica) son ahora capas finas sobre este cerebro.
 """
 
 import json
+import os
 import re
 import threading
+import time
 from datetime import datetime
 
 from config import ADMIN_NOMBRE
@@ -33,12 +35,16 @@ from core.skills_os import (
     copiar_archivo, mover_archivo, ajustar_brillo, abrir_programa,
     abrir_url_en_navegador, listar_directorio, leer_archivo, crear_archivo,
 )
-from core.skills_programas import abrir_programa_inteligente
+from core.skills_programas import abrir_programa_inteligente, cerrar_programa_inteligente
+from core.skills_archivos import (
+    editar_archivo, insertar_en_archivo, leer_archivo_rango,
+    buscar_en_archivos, buscar_archivos, restaurar_bak,
+)
 from core.skills_control import escribir_texto, abrir_y_escribir, clic as _clic, presionar
 from core.skills_web import leer_pagina_web
 from core.skills_download import descargar_archivo, descargar_video
 from core.skills_conocimiento import guardar_conocimiento, buscar_conocimiento
-from core.logger import log_error
+from core.logger import log_error, log_evento, nuevo_turno
 from core.skills_tasks import (
     tarea_crear, tarea_listar, tarea_completar, tarea_eliminar,
     cliente_crear, cliente_listar,
@@ -111,6 +117,7 @@ class LaraCerebro:
         self.modo_dictado = False      # dictado: la GUI teclea lo que digas
         self.dictado_destino = ""      # programa donde dictar (ej. bloc de notas)
         self.ultima_skill = None       # última skill ejecutada (para "desactívala", "apágalo"...)
+        self._ultimo_cierre_fallido = None  # programa que no se pudo cerrar sin admin (para "usa permisos de administrador")
         self.hablante_actual = None    # quién habló en el último turno (voz_id)
         # Modo agente (Mejora b): cuando está activo, LARA ENCADENA pasos —
         # ejecuta una acción, mira el resultado y decide la siguiente sola, hasta
@@ -175,8 +182,8 @@ class LaraCerebro:
                 pass
 
     def set_modo_agente(self, activo: bool) -> None:
-        """Enciende/apaga el modo agente (encadenar pasos automáticamente)."""
-        self.modo_agente = bool(activo)
+        """Fase 1: el agente multipaso queda pausado hasta unificar permisos."""
+        self.modo_agente = False
 
     # ── Autorización de acciones de riesgo (modos / sandbox) ──────────────────
     # Texto legible de cada acción, para el mensaje de confirmación o el plan.
@@ -185,6 +192,7 @@ class LaraCerebro:
         "ejecutar_codigo": "ejecutar código Python", "ejecutar_codigo_visible": "ejecutar código Python (visible)",
         "mover_archivo": "mover el archivo", "copiar_archivo": "copiar el archivo",
         "crear": "crear el archivo", "escribir": "teclear el texto",
+        "editar_archivo": "editar el archivo", "insertar_en_archivo": "añadir texto al archivo",
         "escribir_en": "abrir y escribir en", "abrir_y_escribir": "abrir y escribir en",
         "clic": "hacer clic en", "presionar": "presionar las teclas", "teclas": "presionar las teclas",
         "descargar": "descargar", "descargar_video": "descargar el video",
@@ -204,18 +212,38 @@ class LaraCerebro:
     def _confirmar(self, accion: str, params, mensaje: str = "") -> bool:
         """Pregunta al usuario antes de una acción de riesgo (modo manual).
 
-        Usa el callback on_confirm que provee la GUI/consola. Si no hay ninguno
-        (nadie a quien preguntar), autoriza —es TU equipo— pero deja rastro en
-        la auditoría; la seguridad real la dan los modos 'plan'/'lectura'."""
+        Usa el callback on_confirm que provee la GUI/consola. Si no hay una UI
+        capaz de confirmar, la acción se deniega: nunca se sustituye la
+        confirmación por una autorización implícita."""
         desc = self._describir_accion(accion, params, mensaje)
         if self._on_confirm is None:
-            modos.auditar(accion, params, "sin-UI-de-confirmacion:auto-autorizado")
-            return True
+            modos.auditar(accion, params, "denegado: sin UI de confirmación")
+            return False
         try:
             return bool(self._on_confirm(accion, desc))
         except Exception as e:
             log_error("on_confirm", str(e))
             return False
+
+    def _autorizar_accion(self, accion: str, params=None, mensaje: str = "") -> tuple[bool, str]:
+        """Único control de acceso para rutas LLM, reflejos y atajos internos.
+
+        Devuelve ``(permitida, motivo)`` sin ejecutar efectos. Así una ruta
+        rápida no puede eludir las mismas reglas que una decisión del modelo.
+        """
+        params = params or []
+        decision, motivo = modos.evaluar(accion, params)
+        if decision == modos.BLOQUEAR:
+            log_evento("autorizacion", accion=accion, modo=modos.get_modo(), resultado="bloqueada")
+            return False, (f"{motivo}\n\n▸ Acción solicitada: "
+                           f"{self._describir_accion(accion, params, mensaje)}")
+        if decision == modos.CONFIRMAR:
+            if not self._confirmar(accion, params, mensaje):
+                log_evento("autorizacion", accion=accion, modo=modos.get_modo(), resultado="denegada")
+                return False, "De acuerdo, no lo hago."
+            modos.auditar(accion, params, "autorizado")
+        log_evento("autorizacion", accion=accion, modo=modos.get_modo(), resultado="permitida")
+        return True, ""
 
     # ── Deshacer (undo) ───────────────────────────────────────────────────────
     def _registrar_undo(self, descripcion: str, accion_inversa) -> None:
@@ -679,7 +707,13 @@ class LaraCerebro:
             self.historial.append({"role": "user", "content": prompt})
             self._persistir("user", prompt)
             self._persistir("assistant", texto)
+            self.historial.append({"role": "assistant", "content": texto})
             return texto
+
+        from core.asistente_util import resolver
+        utilidad = resolver(prompt, self._autorizar_accion)
+        if utilidad is not None:
+            return _resp(utilidad)
 
         # "Silencio" / "cállate" -> apagar SOLO la voz de LARA (no el volumen de
         # Windows). Igualdad o startswith casi exacto (tolera "cállate ya",
@@ -700,10 +734,27 @@ class LaraCerebro:
             skills_voz.set_voz_activa(True)
             return _resp("Voz activada. Te escucho y te hablo de nuevo.")
 
+        # Cambiar el MOTOR de voz: "usa la voz kokoro" (local, sin internet) /
+        # "usa la voz de internet" (edge-tts, Camila). Persiste entre sesiones.
+        if ("kokoro" in limpio_voz or "voz local" in limpio_voz) and any(
+                v in limpio_voz for v in ("usa", "cambia", "pon", "activa", "voz")):
+            from core import skills_voz
+            skills_voz.set_motor_tts("kokoro")
+            return _resp("Listo, ahora hablo con Kokoro, mi voz local sin internet. "
+                         "Di 'usa la voz de internet' para volver a Camila.")
+        if any(f in limpio_voz for f in ("voz de internet", "voz camila", "voz edge",
+                                         "voz normal", "voz de la nube")):
+            from core import skills_voz
+            skills_voz.set_motor_tts("auto")
+            return _resp("De acuerdo, vuelvo a mi voz de internet (Camila), con Kokoro de respaldo.")
+
         # "Desactívala" / "actívalo" -> última skill ejecutada, con el argumento correcto
         pron = self._skill_por_pronombre(t)
         if pron:
             nombre_skill, arg = pron
+            permitido, motivo = self._autorizar_accion("ejecutar_skill", [nombre_skill, arg])
+            if not permitido:
+                return _resp(motivo)
             self._status(f"Ejecutando skill: {nombre_skill} {arg}")
             r = ejecutar_skill_registrada(nombre_skill, arg)
             salida = r.get("stdout") or r.get("error") or "Hecho."
@@ -719,10 +770,17 @@ class LaraCerebro:
             return self.ver_pantalla(prompt)
 
         if t.startswith("anota ") or t.startswith("apunta "):
+            texto_nota = prompt.split(" ", 1)[1]
+            permitido, motivo = self._autorizar_accion("sistema", ["anota", texto_nota])
+            if not permitido:
+                return _resp(motivo)
             from core.skills_sistema import ejecutar as _sis
-            return _resp(_sis("anota", prompt.split(" ", 1)[1]).get("mensaje", "Anotado."))
+            return _resp(_sis("anota", texto_nota).get("mensaje", "Anotado."))
 
         if any(f in t for f in self._DICTADO_INI):
+            permitido, motivo = self._autorizar_accion("escribir_en", ["dictado"])
+            if not permitido:
+                return _resp(motivo)
             destino = ""
             for prog in ("bloc de notas", "notepad", "documento", "word"):
                 if prog in t:
@@ -745,6 +803,9 @@ class LaraCerebro:
 
         for frases, op in self._SISTEMA_INTENTS:
             if any(f in t for f in frases):
+                permitido, motivo = self._autorizar_accion("sistema", [op])
+                if not permitido:
+                    return _resp(motivo)
                 from core.skills_sistema import ejecutar as _sis
                 r = _sis(op)
                 self.contexto_ejecucion = f"[sistema {op}]: {r.get('mensaje','')[:200]}"
@@ -756,7 +817,36 @@ class LaraCerebro:
         """Procesa un turno. Serializado con un lock para que GUI, wake word y
         voz (que pueden entrar a la vez) no se pisen el historial ni el buffer."""
         with self._lock:
-            return self._procesar(prompt, hablante)
+            nuevo_turno()
+            t0 = time.perf_counter()
+            log_evento("turno_inicio", modo=modos.get_modo(), largo=len(prompt or ""))
+            estado = "error"
+            respuesta = ''
+            self._ultima_accion = ''
+            from core import aprendizaje, llm_engine
+            llm_engine._set_motor('')
+            control_aprendizaje = False
+            try:
+                control = aprendizaje.comando(prompt, getattr(self, '_ultimo_ejemplo_id', None), self._autorizar_accion)
+                if control is not None:
+                    control_aprendizaje = True
+                    self._buffer = []
+                    self._say(control)
+                    return control
+                respuesta = self._procesar(prompt, hablante)
+                estado = "ok"
+                return respuesta
+            finally:
+                if not control_aprendizaje:
+                    try:
+                        self._ultimo_ejemplo_id = aprendizaje.registrar(
+                            prompt, respuesta, estado, self._ultima_accion,
+                            llm_engine.get_ultimo_motor(), round((time.perf_counter() - t0) * 1000))
+                    except Exception:
+                        log_evento('aprendizaje_registro_fallo')
+                log_evento("turno_fin", estado=estado,
+                           ms=round((time.perf_counter() - t0) * 1000),
+                           ultima_accion=self._ultima_accion)
 
     def _procesar(self, prompt: str, hablante: str | None = None) -> str:
         """Procesa un mensaje del usuario y devuelve la respuesta de LARA (texto).
@@ -766,6 +856,23 @@ class LaraCerebro:
         Las llamadas antiguas con un solo argumento siguen funcionando igual.
         """
         self.hablante_actual = hablante
+
+        # Restricción explícita del usuario: no pasar por rutinas, skills,
+        # router de acciones ni explicaciones visuales aunque el LLM lo pida.
+        solo_texto = any(f in prompt.lower() for f in (
+            "sin herramientas", "no ejecutes herramientas", "no lo ejecutes",
+            "sin ejecutar", "solo texto"))
+        if solo_texto:
+            self._buffer = []
+            self._status("Razonando sin ejecutar herramientas...")
+            texto = razonar_profundo(prompt, self.contexto_ejecucion, self.historial[-6:])
+            self.historial.extend([{"role": "user", "content": prompt},
+                                   {"role": "assistant", "content": texto}])
+            self._persistir("user", prompt)
+            self._persistir("assistant", texto)
+            self._ultima_respuesta = texto
+            self._say(texto)
+            return texto
 
         # ── Cambio de modo por voz/texto ("modo auto", "modo plan"...) ──
         modo_destino = modos.detectar_cambio_modo(prompt)
@@ -781,6 +888,11 @@ class LaraCerebro:
                    "deshacer", "revierte", "revierte lo ultimo", "revierte lo último",
                    "undo", "cancela lo ultimo", "cancela lo último"):
             self._buffer = []
+            if self._undo:
+                permitido, motivo = self._autorizar_accion("deshacer", [self._undo[-1][0]])
+                if not permitido:
+                    self._say(motivo)
+                    return "\n".join(self._buffer)
             self._say(self._deshacer_ultimo())
             return "\n".join(self._buffer)
 
@@ -788,9 +900,9 @@ class LaraCerebro:
         _p = prompt.lower().strip().strip(".!?¡¿")
         if _p in ("modo agente on", "modo agente", "activa el modo agente", "encender modo agente",
                   "modo autonomo", "modo autónomo"):
-            self.set_modo_agente(True)
             self._buffer = []
-            self._say("Modo agente activado. Ahora encadeno pasos hasta terminar la tarea.")
+            self._say("El modo agente está pausado durante la Fase 1 de estabilización. "
+                      "LARA seguirá trabajando paso a paso con confirmaciones.")
             return "\n".join(self._buffer)
         if _p in ("modo agente off", "apaga el modo agente", "apagar modo agente", "detener modo agente"):
             self.set_modo_agente(False)
@@ -809,6 +921,30 @@ class LaraCerebro:
                 log_error("detener_voz", str(e))
             self._buffer = []
             return ""  # sin respuesta hablada: solo se detiene
+
+        # Reintentar el último cierre de programa que falló por permisos, esta
+        # vez CON elevación (dispara UAC) -- sin que el usuario tenga que
+        # repetir el nombre del programa.
+        if self._ultimo_cierre_fallido and any(f in _p for f in (
+                "permiso de administrador", "permisos de administrador",
+                "como administrador", "con administrador", "modo administrador",
+                "usa admin", "dale admin", "eleva", "elevalo", "elévalo")):
+            from core.skills_programas import cerrar_programa_inteligente as _cerrar
+            objetivo = self._ultimo_cierre_fallido
+            self._buffer = []
+            permitido, motivo = self._autorizar_accion("cerrar", [objetivo, "como administrador"])
+            if not permitido:
+                self._say(motivo)
+                return "\n".join(self._buffer)
+            self._status(f"Cerrando {objetivo} con permisos de administrador")
+            resultado = _cerrar(objetivo, admin=True)
+            if "error" in resultado:
+                self._ultimo_cierre_fallido = None  # ya se intentó elevado: no insistir en bucle
+                self._say(f"Tampoco pude cerrarlo como administrador — {resultado['error']}")
+            else:
+                self._ultimo_cierre_fallido = None
+                self._say(f"Listo, cerré {resultado.get('nombre', objetivo)} con permisos de administrador.")
+            return "\n".join(self._buffer)
 
         # Repetir la última respuesta.
         if _p in ("repite", "repítelo", "repitelo", "repite eso", "que dijiste",
@@ -961,7 +1097,14 @@ class LaraCerebro:
                 self._status(f"Ejecutando rutina: {nombre_rutina}")
                 self.historial.append({"role": "user", "content": prompt})
                 self._persistir("user", prompt)
-                texto = rutinas.ejecutar_rutina(nombre_rutina, on_speak=self._on_speak)
+                permitido, motivo = self._autorizar_accion("rutina", [nombre_rutina])
+                if not permitido:
+                    self._say(motivo)
+                    return "\n".join(self._buffer)
+                # Cada paso con efecto pasa además por la misma política.
+                texto = rutinas.ejecutar_rutina(
+                    nombre_rutina, on_speak=self._on_speak,
+                    autorizar=lambda accion, params: self._autorizar_accion(accion, params)[0])
                 if texto:
                     self._buffer.append(texto)
                     self._persistir("assistant", texto)
@@ -1086,6 +1229,10 @@ class LaraCerebro:
         skill_match = self._detectar_skill_en_input(prompt)
         if skill_match:
             nombre_skill, arg_skill = skill_match
+            permitido, motivo = self._autorizar_accion("ejecutar_skill", [nombre_skill, arg_skill])
+            if not permitido:
+                self._say(motivo)
+                return "\n".join(self._buffer)
             self.ultima_skill = nombre_skill
             self._status(f"Ejecutando skill: {nombre_skill} {arg_skill}")
             resultado_skill = ejecutar_skill_registrada(nombre_skill, arg_skill)
@@ -1189,15 +1336,10 @@ class LaraCerebro:
         # modo activo (auto/manual/plan/lectura) la acción se ejecuta, se pide
         # confirmación, o se bloquea describiéndola. Lo inocuo (hablar, buscar,
         # leer, consultas) pasa siempre sin fricción.
-        decision, motivo = modos.evaluar(accion, params)
-        if decision == modos.BLOQUEAR:
-            self._say(f"{motivo}\n\n▸ Acción que pediste: {self._describir_accion(accion, params, mensaje)}")
+        permitido, motivo = self._autorizar_accion(accion, params, mensaje)
+        if not permitido:
+            self._say(motivo)
             return
-        if decision == modos.CONFIRMAR:
-            if not self._confirmar(accion, params, mensaje):
-                self._say("De acuerdo, no lo hago.")
-                return
-            modos.auditar(accion, params)
 
         # Anti-desactualización: si el modelo responde "no hay datos/no se ha
         # publicado/consulta tú mismo", es su entrenamiento viejo hablando.
@@ -1530,6 +1672,106 @@ class LaraCerebro:
             self.contexto_ejecucion = f"Descarga de video: {json.dumps(resultado, ensure_ascii=False)}"
             return
 
+        # ── Capacidades de AGENTE de trabajo (skills_archivos) ────────────────
+        # Editar/buscar archivos con precisión (como Claude Code): leer_rango,
+        # editar_archivo, insertar_en_archivo, buscar_en_archivos (grep),
+        # buscar_archivos (glob). El gate de modos ya filtró las que modifican.
+        if accion == "leer_rango":
+            ruta = params[0] if params else ""
+            desde = params[1] if len(params) > 1 else 1
+            hasta = params[2] if len(params) > 2 else 0
+            if not ruta:
+                self._say("¿Qué archivo quieres que lea?")
+                return
+            r = leer_archivo_rango(ruta, desde, hasta)
+            if "error" in r:
+                self._say(f"No pude leer el archivo — {r['error']}")
+            else:
+                self._say(f"{r['archivo']} ({r['total_lineas']} líneas, "
+                          f"mostrando {r['desde']}–{r['hasta']}):\n{r['contenido']}",
+                          hablar=False)
+                self._say(f"Leí {r['archivo']}: {r['total_lineas']} líneas.")
+                self.contexto_ejecucion = f"[Contenido de {r['ruta']} líneas {r['desde']}-{r['hasta']}]:\n{r['contenido'][:2500]}"
+            return
+
+        if accion == "editar_archivo":
+            ruta = params[0] if params else ""
+            buscar = params[1] if len(params) > 1 else ""
+            reemplazar = params[2] if len(params) > 2 else ""
+            todas = bool(params[3]) if len(params) > 3 else False
+            if not ruta or not buscar:
+                self._say("Para editar necesito el archivo y el fragmento exacto a cambiar.")
+                return
+            r = editar_archivo(ruta, buscar, reemplazar, todas)
+            if "error" in r:
+                self._say(f"No pude editar — {r['error']}")
+            else:
+                self._registrar_undo(f"edición de {os.path.basename(r['ruta'])}",
+                                     lambda ru=ruta: restaurar_bak(ru))
+                self._say(mensaje or f"Listo, apliqué {r['sustituciones']} cambio(s) en {os.path.basename(r['ruta'])}.")
+                self.contexto_ejecucion = f"[editar_archivo]: {json.dumps(r, ensure_ascii=False)}"
+            return
+
+        if accion == "insertar_en_archivo":
+            ruta = params[0] if params else ""
+            texto = params[1] if len(params) > 1 else mensaje
+            tras = params[2] if len(params) > 2 else ""
+            if not ruta or not texto:
+                self._say("Dime el archivo y el texto a insertar.")
+                return
+            r = insertar_en_archivo(ruta, texto, tras)
+            if "error" in r:
+                self._say(f"No pude insertar — {r['error']}")
+            else:
+                self._registrar_undo(f"inserción en {os.path.basename(r['ruta'])}",
+                                     lambda ru=ruta: restaurar_bak(ru))
+                self._say(mensaje or f"Añadí el texto en {os.path.basename(r['ruta'])} ({r['donde']}).")
+                self.contexto_ejecucion = f"[insertar_en_archivo]: {json.dumps(r, ensure_ascii=False)}"
+            return
+
+        if accion == "buscar_en_archivos":
+            patron = params[0] if params else ""
+            carpeta = params[1] if len(params) > 1 else ""
+            glob = params[2] if len(params) > 2 else "*"
+            if not patron:
+                self._say("¿Qué texto quieres que busque dentro de los archivos?")
+                return
+            self._status(f"Buscando «{patron}» en los archivos...")
+            r = buscar_en_archivos(patron, carpeta, glob)
+            if "error" in r:
+                self._say(f"No pude buscar — {r['error']}")
+            else:
+                coincidencias = r.get("coincidencias", [])
+                if coincidencias:
+                    detalle = "\n".join(coincidencias)
+                    self._say(detalle, hablar=False)
+                    self._say(f"Encontré {len(coincidencias)} coincidencia(s) de «{patron}».")
+                    self.contexto_ejecucion = f"[buscar_en_archivos «{patron}»]:\n{detalle[:2500]}"
+                else:
+                    self._say(r.get("nota", "Sin coincidencias."))
+            return
+
+        if accion == "buscar_archivos":
+            patron = params[0] if params else ""
+            carpeta = params[1] if len(params) > 1 else ""
+            if not patron:
+                self._say("¿Qué archivo quieres que localice?")
+                return
+            self._status(f"Localizando archivos «{patron}»...")
+            r = buscar_archivos(patron, carpeta)
+            if "error" in r:
+                self._say(f"No pude localizar — {r['error']}")
+            else:
+                rutas = r.get("archivos", [])
+                if rutas:
+                    detalle = "\n".join(rutas)
+                    self._say(detalle, hablar=False)
+                    self._say(f"Encontré {r['total']} archivo(s).")
+                    self.contexto_ejecucion = f"[buscar_archivos «{patron}»]:\n{detalle[:2000]}"
+                else:
+                    self._say(r.get("nota", "No encontré archivos."))
+            return
+
         # Acciones del sistema operativo (bloque final: cmd / código / archivos /
         # abrir / listar / leer / crear). Extraído a su propio método para acotar
         # el tamaño del despachador y dejar un punto único donde tocar el SO.
@@ -1560,6 +1802,8 @@ class LaraCerebro:
                     registrar_limitacion("ajustar_brillo", f"Falla en este equipo: {resultado['error']}")
             elif accion == "abrir":
                 resultado = abrir_programa_inteligente(params[0])
+            elif accion == "cerrar":
+                resultado = cerrar_programa_inteligente(params[0])
             elif accion == "listar":
                 resultado = listar_directorio(params[0] if params else "")
             elif accion == "leer":
@@ -1573,6 +1817,13 @@ class LaraCerebro:
             log_error(accion, str(e))
             resultado = {"error": str(e)}
 
+        if accion == "cerrar":
+            # Recuerda el objetivo para poder reintentar CON permisos de
+            # administrador si el usuario lo pide a continuación sin repetir
+            # el nombre del programa (ver procesar(): frase "usa permisos de
+            # administrador").
+            self._ultimo_cierre_fallido = params[0] if resultado.get("necesita_admin") else None
+
         if "error" in resultado:
             self._say(f"No pude completarlo — {resultado['error']}")
         elif accion == "abrir":
@@ -1582,6 +1833,9 @@ class LaraCerebro:
             if resultado.get("alternativas"):
                 extra = f" (si no era ese, también tengo: {', '.join(resultado['alternativas'])})"
             self._say(f"Abriendo {nombre_real}.{extra}")
+        elif accion == "cerrar":
+            extra = f" (también encontré: {', '.join(resultado['alternativas'])})" if resultado.get("alternativas") else ""
+            self._say(f"Cerrado {resultado.get('nombre', '')}.{extra}")
         elif mensaje:
             self._say(mensaje)
 
@@ -1599,6 +1853,18 @@ class LaraCerebro:
             self._say(f"{resultado.get('ruta','')}\n{items}", hablar=False)
         elif accion == "leer" and "contenido" in resultado:
             self._say(resultado["contenido"], hablar=False)
+        # cmd / cmd_admin: si trajeron salida real, mostrarla (el admin ahora
+        # SÍ captura su stdout) — al pantalla completo, y un resumen hablado.
+        elif accion in ("cmd", "cmd_admin") and "error" not in resultado:
+            salida = (resultado.get("stdout") or "").strip()
+            err = (resultado.get("stderr") or "").strip()
+            if salida:
+                self._say(salida, hablar=False)
+                self._say("Listo, ejecutado" + (" con permisos de administrador." if accion == "cmd_admin" else "."))
+            elif resultado.get("nota"):
+                self._say(resultado["nota"])
+            if err:
+                self._say(f"(avisos: {err[:200]})", hablar=False)
 
         self.contexto_ejecucion = f"Última acción ({accion}) resultado: {json.dumps(resultado, ensure_ascii=False)}"
         self.historial.append({"role": "user", "content": f"Resultado interno (invisible para {ADMIN_NOMBRE}): {json.dumps(resultado, ensure_ascii=False)}"})

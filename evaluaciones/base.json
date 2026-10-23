@@ -1,0 +1,20 @@
+{
+  "acciones": [
+    {"id":"a01","pregunta":"Abre calculadora","esperado":{"accion":"abrir","params":["calculadora"]}},
+    {"id":"a02","pregunta":"Abre bloc de notas","esperado":{"accion":"abrir","params":["bloc de notas"]}},
+    {"id":"a03","pregunta":"Lee el archivo C:/prueba/manual.txt","esperado":{"accion":"leer","params":["C:/prueba/manual.txt"]}},
+    {"id":"a04","pregunta":"Explícame cómo abrir calculadora sin ejecutar nada","esperado":{"accion":"hablar","params":[]}},
+    {"id":"a05","pregunta":"Solo texto: cómo borrar un archivo. No ejecutes herramientas.","esperado":{"accion":"hablar","params":[]}},
+    {"id":"a06","pregunta":"Hola, ¿cómo estás?","esperado":{"accion":"hablar","params":[]}},
+    {"id":"a07","pregunta":"Busca en internet: documentación oficial de Python","esperado":{"accion":"buscar","params":["documentación oficial de Python"]}},
+    {"id":"a08","pregunta":"Solo explica qué hace un transistor, sin herramientas","esperado":{"accion":"hablar","params":[]}}
+  ],
+  "conversacion": [
+    {"id":"c01","pregunta":"Resistencia para LED 2 V, 20 mA con fuente 12 V. Devuelve JSON con R_ohm y P_w numéricos.","esperado":{"R_ohm":500,"P_w":0.2}},
+    {"id":"c02","pregunta":"Tres cajas etiquetadas manzanas, naranjas y mezcla; todas las etiquetas falsas. Saco una manzana de la etiquetada mezcla. Devuelve JSON: etiqueta_manzanas, etiqueta_naranjas y etiqueta_mezcla, con sus contenidos reales (manzanas, naranjas o mezcla).","esperado":{"etiqueta_manzanas":"naranjas","etiqueta_naranjas":"mezcla","etiqueta_mezcla":"manzanas"}},
+    {"id":"c03","pregunta":"Mediana de [-5,-1,-3,-2]. Devuelve JSON con mediana numérica.","esperado":{"mediana":-2.5}},
+    {"id":"c04","pregunta":"Un equipo consume 60 W durante 5 horas diarias por 30 días. Devuelve JSON con energia_kwh numérica.","esperado":{"energia_kwh":9}},
+    {"id":"c05","pregunta":"Pongo 1 kohm y 2 kohm en paralelo. Devuelve JSON con resistencia_ohm redondeada a dos decimales.","esperado":{"resistencia_ohm":666.67}},
+    {"id":"c06","pregunta":"¿Ejecutaste comandos para responder esta pregunta? No dispones de herramientas. Devuelve JSON con ejecutado boolean.","esperado":{"ejecutado":false}}
+  ]
+}

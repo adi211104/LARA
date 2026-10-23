@@ -14,7 +14,6 @@ from config import ADMIN_NOMBRE
 from core import modos
 from core.cerebro import LaraCerebro
 from core.agente_fondo import iniciar_agente_fondo, set_voz_alertas
-from core.skills_registry import auto_registrar_skills_core
 from core.skills_memoria import total_turnos_guardados
 from core import skills_voz, rutinas
 
@@ -73,12 +72,7 @@ def main():
     # El agente de fondo ahora puede AVISAR EN VOZ ALTA lo crítico (tareas que
     # vencen ya), no solo notificarlo en pantalla. Respeta el estado de voz.
     set_voz_alertas(lambda m: skills_voz.hablar(m))
-    try:
-        nuevas = auto_registrar_skills_core()
-        if nuevas:
-            print(f"[LARA] Skills auto-registradas: {', '.join(nuevas)}")
-    except Exception as e:
-        print(f"[LARA] Aviso: no se pudo auto-registrar skills: {e}")
+    # Fase 1: no se descubren ni ejecutan scripts dinámicamente al arrancar.
 
     # Briefing proactivo tipo JARVIS: saluda por tu nombre y te pone al día
     # (tareas urgentes, compras, novedades). Se muestra siempre; se dice en voz

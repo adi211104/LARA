@@ -63,6 +63,7 @@ persistente y ejecución de acciones en el sistema operativo.
 | Módulo | Responsabilidad |
 |---|---|
 | `stt_local.py` | Transcripción local (faster-whisper). |
+| `turno_habla.py` | Compuerta semántica de fin de turno: evalúa si la idea está completa antes de dejar cortar la grabación por silencio. |
 | `wake_word.py` | Palabra de activación ("hey jarvis" / "Lara"). |
 | `voz_id.py` | Reconocimiento del hablante (candado de voz). |
 

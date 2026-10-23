@@ -56,8 +56,29 @@ def _cargar_modelo():
         try:
             from faster_whisper import WhisperModel
         except Exception:
-            _estado = False
-            return None
+            # Caso real visto en esta PC: Smart App Control de Windows bloquea
+            # los .pyd SIN FIRMA de PyAV ("no podemos confirmar quién publicó
+            # output.pyd") y el import de faster_whisper muere entero — y LARA
+            # se quedaba sin oído local (todo el STT se iba a la nube, más
+            # lento). Pero faster-whisper solo usa 'av' para decodificar
+            # ARCHIVOS de audio (decode_audio) y LARA siempre le pasa arrays
+            # de numpy ya decodificados: un módulo hueco en su lugar basta
+            # para que el resto funcione igual.
+            try:
+                import sys as _sys
+                import types as _types
+                if "av" not in _sys.modules:
+                    _stub = _types.ModuleType("av")
+                    _stub.__version__ = "0.0-stub-lara"
+                    _sys.modules["av"] = _stub
+                from faster_whisper import WhisperModel
+                print("[LARA] PyAV bloqueado/no disponible: Whisper local sigue "
+                      "activo (solo se pierde decodificar archivos de audio).")
+            except Exception:
+                _estado = False
+                print("[LARA] faster-whisper no se pudo cargar. STT local "
+                      "desactivado esta sesión; uso Whisper en la nube.")
+                return None
         try:
             # int8 = rápido y ligero en CPU; float16 si hay GPU. compute_type
             # "auto" deja que la librería elija lo mejor para el dispositivo.
@@ -113,20 +134,39 @@ def transcribir(crudo: bytes, sr_rate: int = 16000):
         # el 99% del uso por voz. Ajustable con LARA_WHISPER_BEAM si algún día
         # quieres priorizar precisión sobre velocidad.
         beam = int(os.environ.get("LARA_WHISPER_BEAM", "1"))
+        # initial_prompt: ancla el estilo/vocabulario esperado. Ayuda con el
+        # acento y con nombres que Whisper "small" transcribe raro. Se puede
+        # cambiar o vaciar con LARA_WHISPER_PROMPT.
+        # El prompt CEBA el vocabulario típico: sin él, el modelo "small"
+        # transcribía "blog de notas" en vez de "bloc de notas", etc.
+        prompt = os.environ.get(
+            "LARA_WHISPER_PROMPT",
+            "Conversación en español con Lara, la asistente del taller de "
+            "electrónica: Lara, abre el bloc de notas. ¿Qué hora es? Sube el "
+            "volumen. Anota esto en mis tareas.") or None
         segmentos, _info = modelo.transcribe(
             audio, language=_IDIOMA, vad_filter=True,
             beam_size=beam, temperature=0.0,
             condition_on_previous_text=False,
+            initial_prompt=prompt,
         )
-        partes = []
+        partes, dudosos = [], 0
         for s in segmentos:
             # avg_logprob bajo o no_speech_prob alto => segmento dudoso (ruido)
             if getattr(s, "no_speech_prob", 0.0) > 0.6:
                 continue
             if getattr(s, "avg_logprob", 0.0) < -1.0:
+                dudosos += 1   # HABÍA voz, pero el modelo pequeño no está seguro
                 continue
             partes.append(s.text.strip())
-        return " ".join(p for p in partes if p).strip()
+        texto = " ".join(p for p in partes if p).strip()
+        if not texto and dudosos:
+            # El "small" oyó algo pero no lo entendió con confianza. Antes esto
+            # devolvía "" y LARA te decía "no entendí" (tenías que REPETIR).
+            # Devolver None deja que el llamador pruebe Whisper large en la
+            # NUBE, que entiende mucho mejor los casos difíciles.
+            return None
+        return texto
     except Exception as e:
         print(f"[LARA] Error en Whisper local: {e}")
         return None

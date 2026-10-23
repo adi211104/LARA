@@ -1,0 +1,33 @@
+Kokoro TTS — respaldo de voz offline REAL (opcional)
+=====================================================
+
+Coloca aquí los dos archivos de pesos de Kokoro-82M (Apache 2.0):
+
+  1. kokoro-v1.0.onnx    (usa la versión f32/normal, NO la int8)
+  2. voices-v1.0.bin
+
+Descárgalos desde:
+  https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
+  https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+
+IMPORTANTE — probado en esta PC (CPU sin aceleración VNNI): la versión
+int8 "kokoro-v1.0.int8.onnx" (más chica, 88 MB) en teoría debería ir más
+rápido, pero midió 5-8x MÁS LENTA que tiempo real (una frase de 3.6 s de
+audio tardó 23 s en sintetizarse) porque esta CPU no tiene los kernels de
+hardware que aceleran int8, y onnxruntime cae a un camino de cómputo lento.
+La versión f32 normal (310 MB) midió 0.5x-2x tiempo real -- mucho más
+usable. Si tu CPU sí tiene AVX512-VNNI (procesadores Intel recientes),
+puede que int8 te vaya mejor a ti; pruébalo y compara antes de asumir que
+"más chico = más rápido".
+
+Instala el paquete (ya en requirements.txt):
+  pip install kokoro-onnx espeakng-loader phonemizer-fork
+
+Sin estos archivos, LARA sigue funcionando exactamente igual que antes: usa
+edge-tts como voz principal y pyttsx3 como último respaldo. Kokoro solo entra
+en juego si edge-tts falla (sin internet) y estos dos archivos existen aquí.
+
+Rutas configurables con las variables de entorno LARA_KOKORO_MODEL y
+LARA_KOKORO_VOICES si prefieres guardarlos en otro lugar. Voz e idioma:
+LARA_KOKORO_VOZ (por defecto "ef_dora", femenina en español) y
+LARA_KOKORO_LANG (por defecto "es").

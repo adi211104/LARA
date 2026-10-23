@@ -19,6 +19,8 @@ color queda reservado a las pestañas de la cabecera; el acento local es ACENTO.
 """
 
 import os
+import re
+import queue
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
@@ -41,7 +43,7 @@ MODOS = [
     ("Solicitar permisos",    "permisos",  "confirma cada archivo y comando"),
     ("Aceptar ediciones",     "ediciones", "escribe libre; confirma comandos"),
     ("Modo de planificación", "plan",      "solo explora y entrega un plan"),
-    ("Modo automático",       "auto",      "trabaja sola de principio a fin"),
+    ("Modo automático",       "auto",      "edita y ejecuta pruebas sin confirmaciones"),
 ]
 
 
@@ -50,8 +52,13 @@ class OpenCodePanel(tk.Frame):
         super().__init__(master, bg=FONDO)
         self.carpeta = None
         self.agente = None
+        self._eventos = []
+        self._cola_ui = queue.Queue()
+        self._ocupado = False
+        self._sid_cargada = None
         self._construir()
         self._refrescar_sesiones()
+        self.after(60, self._vaciar_cola)
 
     def _construir(self):
         # ── Barra superior: título + chip de carpeta ────────────
@@ -67,6 +74,10 @@ class OpenCodePanel(tk.Frame):
         self._boton(top, "🗀＋", self._elegir_carpeta).pack(side="left")
         self.lbl_ruta = tk.Label(top, text="", font=FUENTE_I, fg=SUAVE, bg=FONDO)
         self.lbl_ruta.pack(side="left", padx=10)
+        self.ver_detalles = tk.BooleanVar(value=False)
+        tk.Checkbutton(top, text='Detalles técnicos', variable=self.ver_detalles,
+                       command=self._repintar, bg=FONDO, fg=SUAVE, selectcolor=PANEL,
+                       activebackground=FONDO, activeforeground=TEXTO, font=FUENTE).pack(side='right')
 
         # ── Cuerpo: historial + consola ─────────────────────────
         cuerpo = tk.Frame(self, bg=FONDO)
@@ -163,7 +174,7 @@ class OpenCodePanel(tk.Frame):
                 "LARA pide permiso", f"¿Autorizas a LARA a {verbo}?\n\n{detalle}", parent=self)
             evento.set()
 
-        self.after(0, preguntar)
+        self._cola_ui.put(('callback', preguntar))
         evento.wait(timeout=300)
         return resultado["ok"]
 
@@ -176,26 +187,49 @@ class OpenCodePanel(tk.Frame):
             self._sesion_ids.append(s["id"])
 
     def _nueva_sesion(self):
+        if self._ocupado:
+            return
+        self._sid_cargada = None
         self._limpiar_consola()
         if self.carpeta:
             self.agente = AgenteCodigo(self.carpeta, on_log=self._log_safe,
                                        modo=self._modo_clave(), on_confirmar=self._confirmar)
+            self._sid_cargada = self.agente.session_id
             self._log_raw("sistema", f"Nueva sesión lista sobre: {self.carpeta}")
         else:
             self._log_raw("sistema", "Nueva sesión: elige una carpeta de trabajo para empezar.")
         self._refrescar_sesiones()
 
     def _abrir_sesion(self, _evt):
+        if self._ocupado:
+            return
         sel = self.lista.curselection()
         if not sel:
             return
         sid = self._sesion_ids[sel[0]]
+        if sid == self._sid_cargada and self.agente is not None:
+            return
         data = sesiones.cargar_sesion("code", sid)
+        carpeta = data.get('carpeta')
+        if not carpeta and data.get('titulo') == 'Code: Desktop':
+            from config import ESCRITORIO
+            carpeta = str(ESCRITORIO)
+        self._sid_cargada = sid
+        self.carpeta = carpeta if carpeta and os.path.isdir(carpeta) else None
+        self.agente = (AgenteCodigo(self.carpeta, on_log=self._log_safe, session_id=sid,
+                       modo=self._modo_clave(), on_confirmar=self._confirmar) if self.carpeta else None)
+        self.btn_carpeta.config(text='📁 ' + (os.path.basename(self.carpeta) if self.carpeta else 'Elegir carpeta…'))
+        self.lbl_ruta.config(text=self.carpeta or '')
         self._limpiar_consola()
         self._log_raw("sistema", f"Sesión cargada: {data.get('titulo','')}")
-        for t in data.get("turnos", []):
-            tipo = "usuario" if t["role"] == "user" else "pensamiento"
-            self._log_raw(tipo, t["content"])
+        for t in data.get("turnos", [])[-200:]:
+            texto = t['content']
+            tipo = 'usuario' if t['role'] == 'user' else 'pensamiento'
+            marca = re.match(r'^\[(plan|terminado|leer|listar|escribir|cmd)\]\s*', texto)
+            if tipo != 'usuario' and marca:
+                tipo = marca[1]
+                texto = texto[marca.end():]
+            self._log_raw(tipo, texto[:12000])
 
     def _menu_sesion(self, evt):
         idx = self.lista.nearest(evt.y)
@@ -218,6 +252,8 @@ class OpenCodePanel(tk.Frame):
 
     # ── carpeta y ejecución ─────────────────────────────────────
     def _elegir_carpeta(self):
+        if self._ocupado:
+            return
         ruta = filedialog.askdirectory(title="Carpeta donde LARA programará")
         if not ruta:
             return
@@ -226,11 +262,15 @@ class OpenCodePanel(tk.Frame):
         self.btn_carpeta.config(text=f"📁 {nombre}")
         self.lbl_ruta.config(text=ruta)
         self.agente = AgenteCodigo(ruta, on_log=self._log_safe,
-                                   modo=self._modo_clave(), on_confirmar=self._confirmar)
+                                   modo=self._modo_clave(), on_confirmar=self._confirmar,
+                                   session_id=self._sid_cargada)
+        self._sid_cargada = self.agente.session_id
         self._refrescar_sesiones()
         self._log_raw("sistema", f"Carpeta de trabajo: {ruta}. Escribe una tarea y pulsa Ejecutar.")
 
     def _ejecutar(self):
+        if self._ocupado:
+            return
         if not self.agente:
             self._log_raw("error", "Primero elige una carpeta de trabajo.")
             return
@@ -239,14 +279,15 @@ class OpenCodePanel(tk.Frame):
             return
         self.entrada.delete(0, "end")
         self.btn_run.config(state="disabled")
+        self._ocupado = True
+        agente = self.agente
 
         def trabajo():
             try:
-                self.agente.ejecutar_tarea(tarea)
+                agente.ejecutar_tarea(tarea)
             except Exception as e:
                 self._log_safe("error", str(e))
-            self.after(0, lambda: self.btn_run.config(state="normal"))
-            self.after(0, self._refrescar_sesiones)
+            self._cola_ui.put(('fin', ''))
 
         threading.Thread(target=trabajo, daemon=True).start()
 
@@ -256,16 +297,58 @@ class OpenCodePanel(tk.Frame):
 
     # ── consola ─────────────────────────────────────────────────
     def _limpiar_consola(self):
+        self._eventos = []
         self.consola.config(state="normal")
         self.consola.delete("1.0", "end")
         self.consola.config(state="disabled")
 
     def _log_raw(self, tipo, texto):
+        self._eventos.append((tipo, texto))
+        self._insertar_evento(tipo, texto)
+
+    def _repintar(self):
+        self.consola.config(state='normal')
+        self.consola.delete('1.0', 'end')
+        self.consola.config(state='disabled')
+        for tipo, texto in self._eventos:
+            self._insertar_evento(tipo, texto)
+
+    def _insertar_evento(self, tipo, texto):
+        if not self.ver_detalles.get():
+            if tipo in ('leer', 'listar', 'cmd', 'salida'):
+                return
+            if tipo == 'plan':
+                texto = 'Estoy organizando los pasos y cómo comprobar el resultado.'
+            elif tipo == 'pensamiento':
+                texto = 'Estoy trabajando en el siguiente paso…'
+            elif tipo == 'escribir':
+                texto = 'He guardado los cambios en los archivos de trabajo.'
+            elif tipo == 'confirmar':
+                texto = 'Necesito tu confirmación para continuar con esta acción.'
+            elif tipo in ('terminado', 'error'):
+                texto = re.sub(r'```[\s\S]*?```', '[Código disponible en los detalles técnicos]', texto)
+        etiqueta = 'Progreso' if tipo in ('pensamiento', 'plan', 'escribir') and not self.ver_detalles.get() else ETIQUETA.get(tipo, tipo)
         self.consola.config(state="normal")
-        self.consola.insert("end", f"[{ETIQUETA.get(tipo, tipo)}] ", "etq")
+        self.consola.insert("end", f"[{etiqueta}] ", "etq")
         self.consola.insert("end", f"{texto}\n", "cuerpo")
         self.consola.config(state="disabled")
         self.consola.see("end")
 
     def _log_safe(self, tipo, texto):
-        self.after(0, lambda: self._log_raw(tipo, texto))
+        self._cola_ui.put((tipo, texto))
+
+    def _vaciar_cola(self):
+        for _ in range(40):
+            try:
+                tipo, texto = self._cola_ui.get_nowait()
+            except queue.Empty:
+                break
+            if tipo == 'callback':
+                texto()
+            elif tipo == 'fin':
+                self._ocupado = False
+                self.btn_run.config(state='normal')
+                self._refrescar_sesiones()
+            else:
+                self._log_raw(tipo, texto)
+        self.after(60, self._vaciar_cola)
